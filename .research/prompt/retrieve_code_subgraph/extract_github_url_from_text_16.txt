@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed method integrates feature-wise transformation layers into the feature encoder of metric-based few-shot classification models. These layers modulate intermediate feature activations with affine transformations (scaling term \gamma and bias term \beta) sampled from Gaussian distributions, whose standard deviations are parameterized by \theta\gamma and \theta\beta. The feature-wise transformation layers are inserted after batch normalization layers at multiple levels. A learning-to-learn algorithm is employed to optimize these hyperparameters: in each iteration, a pseudo-seen domain and a pseudo-unseen domain are sampled from the available seen domains. The metric-based model is first updated using the pseudo-seen task, and then the effectiveness of the feature-wise transformation layers is measured on the pseudo-unseen task (without the transformation layers enabled), with its loss used to update the hyperparameters \theta\gamma and \theta\beta. This allows for joint optimization of the metric-based model and the transformation layers.
+
+# GitHub URLs List
+['https://github.com/hytseng0509/CrossDomainFewShot', 'https://github.com/wyharveychen/CloserLookFewShot', 'https://github.com/vgsatorras/few-shot-gnn', 'https://github.com/wyharveychen/CloserLookFewShot', 'https://github.com/hytseng0509/CrossDomainFewShot', 'https://github.com/kjunelee/MetaOptNet']
+Output:
+{
+    "index": 0
+}
