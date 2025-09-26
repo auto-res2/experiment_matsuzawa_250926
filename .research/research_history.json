@@ -558,7 +558,715 @@
         "FGVC-Aircraft",
         "QuickDraw",
         "Fungi"
-      ]
+      ],
+      "external_resources": {
+        "hugging_face": {
+          "models": [
+            {
+              "id": "timm/mobilenetv4_conv_small_050.e3000_r224_in1k",
+              "author": "timm",
+              "sha": "0ca27fbda87631d17b5a3d348af8e6b150dd9282",
+              "created_at": "2024-09-22T17:24:52+00:00",
+              "last_modified": "2025-01-21T21:57:47+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 309858,
+              "likes": 5,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "pytorch_model.bin"
+                }
+              ],
+              "card_data": {
+                "license": "apache-2.0",
+                "language": [],
+                "library_name": "timm",
+                "tags": [
+                  "image-classification",
+                  "timm",
+                  "transformers"
+                ],
+                "datasets": [
+                  "imagenet-1k"
+                ],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "timm",
+                "pytorch",
+                "safetensors",
+                "image-classification",
+                "transformers",
+                "dataset:imagenet-1k",
+                "arxiv:2404.10518",
+                "license:apache-2.0",
+                "region:us"
+              ],
+              "pipeline_tag": "image-classification",
+              "library_name": "timm",
+              "readme": "---\ntags:\n- image-classification\n- timm\n- transformers\nlibrary_name: timm\nlicense: apache-2.0\ndatasets:\n- imagenet-1k\n---\n# Model card for mobilenetv4_conv_small_050.e3000_r224_in1k\n\nA MobileNet-V4 image classification model. Trained on ImageNet-1k by Ross Wightman.\n\nTrained with `timm` scripts using hyper-parameters inspired by the MobileNet-V4 paper with `timm` enhancements.\n\nNOTE: So far, these are the only known MNV4 weights. Official weights for Tensorflow models are unreleased.\n\n\n## Model Details\n- **Model Type:** Image classification / feature backbone\n- **Model Stats:**\n  - Params (M): 2.2\n  - GMACs: 0.1\n  - Activations (M): 1.2\n  - Image size: train = 224 x 224, test = 256 x 256\n- **Dataset:** ImageNet-1k\n- **Original:** https://github.com/tensorflow/models/tree/master/official/vision\n- **Papers:**\n  - MobileNetV4 -- Universal Models for the Mobile Ecosystem: https://arxiv.org/abs/2404.10518\n  - PyTorch Image Models: https://github.com/huggingface/pytorch-image-models\n\n## Model Usage\n### Image Classification\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model('mobilenetv4_conv_small_050.e3000_r224_in1k', pretrained=True)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\ntop5_probabilities, top5_class_indices = torch.topk(output.softmax(dim=1) * 100, k=5)\n```\n\n### Feature Map Extraction\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_small_050.e3000_r224_in1k',\n    pretrained=True,\n    features_only=True,\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\nfor o in output:\n    # print shape of each feature map in output\n    # e.g.:\n    #  torch.Size([1, 32, 112, 112])\n    #  torch.Size([1, 16, 56, 56])\n    #  torch.Size([1, 32, 28, 28])\n    #  torch.Size([1, 48, 14, 14])\n    #  torch.Size([1, 480, 7, 7])\n\n    print(o.shape)\n```\n\n### Image Embeddings\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_small_050.e3000_r224_in1k',\n    pretrained=True,\n    num_classes=0,  # remove classifier nn.Linear\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # output is (batch_size, num_features) shaped tensor\n\n# or equivalently (without needing to set num_classes=0)\n\noutput = model.forward_features(transforms(img).unsqueeze(0))\n# output is unpooled, a (1, 480, 7, 7) shaped tensor\n\noutput = model.forward_head(output, pre_logits=True)\n# output is a (1, num_features) shaped tensor\n```\n\n## Model Comparison\n### By Top-1\n\n| model                                                                                                                    | top1   | top5   | param_count | img_size |\n|--------------------------------------------------------------------------------------------------------------------------|--------|--------|-------------|----------|\n| [mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k) | 84.99  | 97.294 | 32.59       | 544      |\n| [mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k) | 84.772 | 97.344 | 32.59       | 480      |\n| [mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k) | 84.64  | 97.114 | 32.59       | 448      |\n| [mobilenetv4_hybrid_large.ix_e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.ix_e600_r384_in1k)               | 84.356 | 96.892 | 37.76       | 448      |\n| [mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k) | 84.314 | 97.102 | 32.59       | 384      |\n| [mobilenetv4_hybrid_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.e600_r384_in1k)                     | 84.266 | 96.936 | 37.76       | 448      |\n| [mobilenetv4_hybrid_large.ix_e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.ix_e600_r384_in1k)               | 83.990 | 96.702 | 37.76       | 384      |\n| [mobilenetv4_conv_aa_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e600_r384_in1k)                   | 83.824 | 96.734 | 32.59       | 480      |\n| [mobilenetv4_hybrid_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.e600_r384_in1k)                     | 83.800 | 96.770 | 37.76       | 384      |\n| [mobilenetv4_hybrid_medium.ix_e550_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r384_in1k)             | 83.394 | 96.760 | 11.07       | 448      |\n| [mobilenetv4_conv_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_large.e600_r384_in1k)                         | 83.392 | 96.622 | 32.59       | 448      |\n| [mobilenetv4_conv_aa_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e600_r384_in1k)                   | 83.244 | 96.392 | 32.59       | 384      |\n| [mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k) | 82.99  | 96.67  | 11.07       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r384_in1k)             | 82.968 | 96.474 | 11.07       | 384      |\n| [mobilenetv4_conv_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_large.e600_r384_in1k)                         | 82.952 | 96.266 | 32.59       | 384      |\n| [mobilenetv4_conv_large.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_large.e500_r256_in1k)                         | 82.674 | 96.31  | 32.59       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r256_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r256_in1k)             | 82.492 | 96.278 | 11.07       | 320      |\n| [mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k) | 82.364 | 96.256 | 11.07       | 256      |\n| [mobilenetv4_conv_large.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_large.e500_r256_in1k)                         | 81.862 | 95.69  | 32.59       | 256      |\n| [resnet50d.ra4_e3600_r224_in1k](http://hf.co/timm/resnet50d.ra4_e3600_r224_in1k)                                         | 81.838 | 95.922 | 25.58       | 288      |    \n| [mobilenetv3_large_150d.ra4_e3600_r256_in1k](http://hf.co/timm/mobilenetv3_large_150d.ra4_e3600_r256_in1k)               | 81.806 | 95.9   | 14.62       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r256_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r256_in1k)             | 81.446 | 95.704 | 11.07       | 256      |\n| [efficientnet_b1.ra4_e3600_r240_in1k](http://hf.co/timm/efficientnet_b1.ra4_e3600_r240_in1k)                             | 81.440 | 95.700 | 7.79        | 288      |\n| [mobilenetv4_hybrid_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e500_r224_in1k)                   | 81.276 | 95.742 | 11.07       | 256      |\n| [resnet50d.ra4_e3600_r224_in1k](http://hf.co/timm/resnet50d.ra4_e3600_r224_in1k)                                         | 80.952 | 95.384 | 25.58       | 224      |\n| [mobilenetv3_large_150d.ra4_e3600_r256_in1k](http://hf.co/timm/mobilenetv3_large_150d.ra4_e3600_r256_in1k)               | 80.944 | 95.448 | 14.62       | 256      |\n| [mobilenetv4_conv_medium.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r256_in1k)                       | 80.858 | 95.768 | 9.72        | 320      |\n| [mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k)               | 80.680 | 95.442 | 8.46        | 256      |\n| [mobilenetv4_hybrid_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e500_r224_in1k)                   | 80.442 | 95.38  | 11.07       | 224      |\n| [efficientnet_b1.ra4_e3600_r240_in1k](http://hf.co/timm/efficientnet_b1.ra4_e3600_r240_in1k)                             | 80.406 | 95.152 | 7.79        | 240      |\n| [mobilenetv4_conv_blur_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_blur_medium.e500_r224_in1k)             | 80.142 | 95.298 | 9.72        | 256      |\n| [mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k)               | 80.130 | 95.002 | 8.46        | 224      |\n| [mobilenetv4_conv_medium.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r256_in1k)                       | 79.928 | 95.184 | 9.72        | 256      |\n| [mobilenetv4_conv_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r224_in1k)                       | 79.808 | 95.186 | 9.72        | 256      |\n| [mobilenetv4_conv_blur_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_blur_medium.e500_r224_in1k)             | 79.438 | 94.932 | 9.72        | 224      |\n| [efficientnet_b0.ra4_e3600_r224_in1k](http://hf.co/timm/efficientnet_b0.ra4_e3600_r224_in1k)                             | 79.364 | 94.754 | 5.29        | 256      |\n| [mobilenetv4_conv_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r224_in1k)                       | 79.094 | 94.77  | 9.72        | 224      |\n| [efficientnet_b0.ra4_e3600_r224_in1k](http://hf.co/timm/efficientnet_b0.ra4_e3600_r224_in1k)                             | 78.584 | 94.338 | 5.29        | 224      |\n| [mobilenetv1_125.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_125.ra4_e3600_r224_in1k)                             | 77.600 | 93.804 | 6.27        | 256      |\n| [mobilenetv3_large_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv3_large_100.ra4_e3600_r224_in1k)                 | 77.164 | 93.336 | 5.48        | 256      |\n| [mobilenetv1_125.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_125.ra4_e3600_r224_in1k)                             | 76.924 | 93.234 | 6.27        | 224      |\n| [mobilenetv1_100h.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100h.ra4_e3600_r224_in1k)                           | 76.596 | 93.272 | 5.28        | 256      |\n| [mobilenetv3_large_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv3_large_100.ra4_e3600_r224_in1k)                 | 76.310 | 92.846 | 5.48        | 224      |\n| [mobilenetv1_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100.ra4_e3600_r224_in1k)                             | 76.094 | 93.004 | 4.23        | 256      |\n| [mobilenetv1_100h.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100h.ra4_e3600_r224_in1k)                           | 75.662 | 92.504 | 5.28        | 224      |\n| [mobilenetv1_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100.ra4_e3600_r224_in1k)                             | 75.382 | 92.312 | 4.23        | 224      |\n| [mobilenetv4_conv_small.e2400_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e2400_r224_in1k)                       | 74.616 | 92.072 | 3.77        | 256      |\n| [mobilenetv4_conv_small.e1200_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e1200_r224_in1k)                       | 74.292 | 92.116 | 3.77        | 256      |\n| [mobilenetv4_conv_small.e2400_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e2400_r224_in1k)                       | 73.756 | 91.422 | 3.77        | 224      |\n| [mobilenetv4_conv_small.e1200_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e1200_r224_in1k)                       | 73.454 | 91.34  | 3.77        | 224      |\n| [mobilenetv4_conv_small_050.e3000_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small_050.e3000_r224_in1k)               | 65.810 | 86.424 | 2.24        | 256      |\n| [mobilenetv4_conv_small_050.e3000_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small_050.e3000_r224_in1k)               | 64.762 | 85.514 | 2.24        | 224      |\n\n## Citation\n```bibtex\n@article{qin2024mobilenetv4,\n  title={MobileNetV4-Universal Models for the Mobile Ecosystem},\n  author={Qin, Danfeng and Leichner, Chas and Delakis, Manolis and Fornoni, Marco and Luo, Shixin and Yang, Fan and Wang, Weijun and Banbury, Colby and Ye, Chengxi and Akin, Berkin and others},\n  journal={arXiv preprint arXiv:2404.10518},\n  year={2024}\n}\n```\n```bibtex\n@misc{rw2019timm,\n  author = {Ross Wightman},\n  title = {PyTorch Image Models},\n  year = {2019},\n  publisher = {GitHub},\n  journal = {GitHub repository},\n  doi = {10.5281/zenodo.4414861},\n  howpublished = {\\url{https://github.com/huggingface/pytorch-image-models}}\n}\n```\n",
+              "extracted_code": "from urllib.request import urlopen\nfrom PIL import Image\nimport timm\nimport torch\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model('mobilenetv4_conv_small_050.e3000_r224_in1k', pretrained=True)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\ntop5_probabilities, top5_class_indices = torch.topk(output.softmax(dim=1) * 100, k=5)\n\n\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_small_050.e3000_r224_in1k',\n    pretrained=True,\n    features_only=True,\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\nfor o in output:\n    # print shape of each feature map in output\n    # e.g.:\n    #  torch.Size([1, 32, 112, 112])\n    #  torch.Size([1, 16, 56, 56])\n    #  torch.Size([1, 32, 28, 28])\n    #  torch.Size([1, 48, 14, 14])\n    #  torch.Size([1, 480, 7, 7])\n\n    print(o.shape)\n\n\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_small_050.e3000_r224_in1k',\n    pretrained=True,\n    num_classes=0,  # remove classifier nn.Linear\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # output is (batch_size, num_features) shaped tensor\n\n# or equivalently (without needing to set num_classes=0)\n\noutput = model.forward_features(transforms(img).unsqueeze(0))\n# output is unpooled, a (1, 480, 7, 7) shaped tensor\n\noutput = model.forward_head(output, pre_logits=True)\n# output is a (1, num_features) shaped tensor"
+            },
+            {
+              "id": "timm/mobilenetv4_conv_medium.e500_r224_in1k",
+              "author": "timm",
+              "sha": "02a09fbfb82b289e871ba8255f9da58c056fb13b",
+              "created_at": "2024-06-12T00:13:45+00:00",
+              "last_modified": "2025-01-21T21:57:09+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 2233,
+              "likes": 1,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "pytorch_model.bin"
+                }
+              ],
+              "card_data": {
+                "license": "apache-2.0",
+                "language": [],
+                "library_name": "timm",
+                "tags": [
+                  "image-classification",
+                  "timm",
+                  "transformers"
+                ],
+                "datasets": [
+                  "imagenet-1k"
+                ],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "timm",
+                "pytorch",
+                "safetensors",
+                "image-classification",
+                "transformers",
+                "dataset:imagenet-1k",
+                "arxiv:2404.10518",
+                "license:apache-2.0",
+                "region:us"
+              ],
+              "pipeline_tag": "image-classification",
+              "library_name": "timm",
+              "readme": "---\ntags:\n- image-classification\n- timm\n- transformers\nlibrary_name: timm\nlicense: apache-2.0\ndatasets:\n- imagenet-1k\n---\n# Model card for mobilenetv4_conv_medium.e500_r224_in1k\n\nA MobileNet-V4 image classification model. Trained on ImageNet-1k by Ross Wightman.\n\nTrained with `timm` scripts using hyper-parameters inspired by the MobileNet-V4 paper with `timm` enhancements.\n\nNOTE: So far, these are the only known MNV4 weights. Official weights for Tensorflow models are unreleased.\n\n\n## Model Details\n- **Model Type:** Image classification / feature backbone\n- **Model Stats:**\n  - Params (M): 9.7\n  - GMACs: 0.8\n  - Activations (M): 5.8\n  - Image size: train = 224 x 224, test = 256 x 256\n- **Dataset:** ImageNet-1k\n- **Original:** https://github.com/tensorflow/models/tree/master/official/vision\n- **Papers:**\n  - MobileNetV4 -- Universal Models for the Mobile Ecosystem: https://arxiv.org/abs/2404.10518\n  - PyTorch Image Models: https://github.com/huggingface/pytorch-image-models\n\n## Model Usage\n### Image Classification\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model('mobilenetv4_conv_medium.e500_r224_in1k', pretrained=True)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\ntop5_probabilities, top5_class_indices = torch.topk(output.softmax(dim=1) * 100, k=5)\n```\n\n### Feature Map Extraction\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_medium.e500_r224_in1k',\n    pretrained=True,\n    features_only=True,\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\nfor o in output:\n    # print shape of each feature map in output\n    # e.g.:\n    #  torch.Size([1, 32, 112, 112])\n    #  torch.Size([1, 48, 56, 56])\n    #  torch.Size([1, 80, 28, 28])\n    #  torch.Size([1, 160, 14, 14])\n    #  torch.Size([1, 960, 7, 7])\n\n    print(o.shape)\n```\n\n### Image Embeddings\n```python\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_medium.e500_r224_in1k',\n    pretrained=True,\n    num_classes=0,  # remove classifier nn.Linear\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # output is (batch_size, num_features) shaped tensor\n\n# or equivalently (without needing to set num_classes=0)\n\noutput = model.forward_features(transforms(img).unsqueeze(0))\n# output is unpooled, a (1, 960, 7, 7) shaped tensor\n\noutput = model.forward_head(output, pre_logits=True)\n# output is a (1, num_features) shaped tensor\n```\n\n## Model Comparison\n### By Top-1\n\n| model                                                                                                                    | top1   | top5   | param_count | img_size |\n|--------------------------------------------------------------------------------------------------------------------------|--------|--------|-------------|----------|\n| [mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k) | 84.99  | 97.294 | 32.59       | 544      |\n| [mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k) | 84.772 | 97.344 | 32.59       | 480      |\n| [mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r448_in12k_ft_in1k) | 84.64  | 97.114 | 32.59       | 448      |\n| [mobilenetv4_hybrid_large.ix_e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.ix_e600_r384_in1k)               | 84.356 | 96.892 | 37.76       | 448      |\n| [mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e230_r384_in12k_ft_in1k) | 84.314 | 97.102 | 32.59       | 384      |\n| [mobilenetv4_hybrid_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.e600_r384_in1k)                     | 84.266 | 96.936 | 37.76       | 448      |\n| [mobilenetv4_hybrid_large.ix_e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.ix_e600_r384_in1k)               | 83.990 | 96.702 | 37.76       | 384      |\n| [mobilenetv4_conv_aa_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e600_r384_in1k)                   | 83.824 | 96.734 | 32.59       | 480      |\n| [mobilenetv4_hybrid_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_large.e600_r384_in1k)                     | 83.800 | 96.770 | 37.76       | 384      |\n| [mobilenetv4_hybrid_medium.ix_e550_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r384_in1k)             | 83.394 | 96.760 | 11.07       | 448      |\n| [mobilenetv4_conv_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_large.e600_r384_in1k)                         | 83.392 | 96.622 | 32.59       | 448      |\n| [mobilenetv4_conv_aa_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_aa_large.e600_r384_in1k)                   | 83.244 | 96.392 | 32.59       | 384      |\n| [mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k) | 82.99  | 96.67  | 11.07       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r384_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r384_in1k)             | 82.968 | 96.474 | 11.07       | 384      |\n| [mobilenetv4_conv_large.e600_r384_in1k](http://hf.co/timm/mobilenetv4_conv_large.e600_r384_in1k)                         | 82.952 | 96.266 | 32.59       | 384      |\n| [mobilenetv4_conv_large.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_large.e500_r256_in1k)                         | 82.674 | 96.31  | 32.59       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r256_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r256_in1k)             | 82.492 | 96.278 | 11.07       | 320      |\n| [mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e200_r256_in12k_ft_in1k) | 82.364 | 96.256 | 11.07       | 256      |\n| [mobilenetv4_conv_large.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_large.e500_r256_in1k)                         | 81.862 | 95.69  | 32.59       | 256      |\n| [resnet50d.ra4_e3600_r224_in1k](http://hf.co/timm/resnet50d.ra4_e3600_r224_in1k)                                         | 81.838 | 95.922 | 25.58       | 288      |    \n| [mobilenetv3_large_150d.ra4_e3600_r256_in1k](http://hf.co/timm/mobilenetv3_large_150d.ra4_e3600_r256_in1k)               | 81.806 | 95.9   | 14.62       | 320      |\n| [mobilenetv4_hybrid_medium.ix_e550_r256_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.ix_e550_r256_in1k)             | 81.446 | 95.704 | 11.07       | 256      |\n| [efficientnet_b1.ra4_e3600_r240_in1k](http://hf.co/timm/efficientnet_b1.ra4_e3600_r240_in1k)                             | 81.440 | 95.700 | 7.79        | 288      |\n| [mobilenetv4_hybrid_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e500_r224_in1k)                   | 81.276 | 95.742 | 11.07       | 256      |\n| [resnet50d.ra4_e3600_r224_in1k](http://hf.co/timm/resnet50d.ra4_e3600_r224_in1k)                                         | 80.952 | 95.384 | 25.58       | 224      |\n| [mobilenetv3_large_150d.ra4_e3600_r256_in1k](http://hf.co/timm/mobilenetv3_large_150d.ra4_e3600_r256_in1k)               | 80.944 | 95.448 | 14.62       | 256      |\n| [mobilenetv4_conv_medium.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r256_in1k)                       | 80.858 | 95.768 | 9.72        | 320      |\n| [mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k)               | 80.680 | 95.442 | 8.46        | 256      |\n| [mobilenetv4_hybrid_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_hybrid_medium.e500_r224_in1k)                   | 80.442 | 95.38  | 11.07       | 224      |\n| [efficientnet_b1.ra4_e3600_r240_in1k](http://hf.co/timm/efficientnet_b1.ra4_e3600_r240_in1k)                             | 80.406 | 95.152 | 7.79        | 240      |\n| [mobilenetv4_conv_blur_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_blur_medium.e500_r224_in1k)             | 80.142 | 95.298 | 9.72        | 256      |\n| [mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenet_edgetpu_v2_m.ra4_e3600_r224_in1k)               | 80.130 | 95.002 | 8.46        | 224      |\n| [mobilenetv4_conv_medium.e500_r256_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r256_in1k)                       | 79.928 | 95.184 | 9.72        | 256      |\n| [mobilenetv4_conv_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r224_in1k)                       | 79.808 | 95.186 | 9.72        | 256      |\n| [mobilenetv4_conv_blur_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_blur_medium.e500_r224_in1k)             | 79.438 | 94.932 | 9.72        | 224      |\n| [efficientnet_b0.ra4_e3600_r224_in1k](http://hf.co/timm/efficientnet_b0.ra4_e3600_r224_in1k)                             | 79.364 | 94.754 | 5.29        | 256      |\n| [mobilenetv4_conv_medium.e500_r224_in1k](http://hf.co/timm/mobilenetv4_conv_medium.e500_r224_in1k)                       | 79.094 | 94.77  | 9.72        | 224      |\n| [efficientnet_b0.ra4_e3600_r224_in1k](http://hf.co/timm/efficientnet_b0.ra4_e3600_r224_in1k)                             | 78.584 | 94.338 | 5.29        | 224      |\n| [mobilenetv1_125.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_125.ra4_e3600_r224_in1k)                             | 77.600 | 93.804 | 6.27        | 256      |\n| [mobilenetv3_large_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv3_large_100.ra4_e3600_r224_in1k)                 | 77.164 | 93.336 | 5.48        | 256      |\n| [mobilenetv1_125.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_125.ra4_e3600_r224_in1k)                             | 76.924 | 93.234 | 6.27        | 224      |\n| [mobilenetv1_100h.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100h.ra4_e3600_r224_in1k)                           | 76.596 | 93.272 | 5.28        | 256      |\n| [mobilenetv3_large_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv3_large_100.ra4_e3600_r224_in1k)                 | 76.310 | 92.846 | 5.48        | 224      |\n| [mobilenetv1_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100.ra4_e3600_r224_in1k)                             | 76.094 | 93.004 | 4.23        | 256      |\n| [mobilenetv1_100h.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100h.ra4_e3600_r224_in1k)                           | 75.662 | 92.504 | 5.28        | 224      |\n| [mobilenetv1_100.ra4_e3600_r224_in1k](http://hf.co/timm/mobilenetv1_100.ra4_e3600_r224_in1k)                             | 75.382 | 92.312 | 4.23        | 224      |\n| [mobilenetv4_conv_small.e2400_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e2400_r224_in1k)                       | 74.616 | 92.072 | 3.77        | 256      |\n| [mobilenetv4_conv_small.e1200_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e1200_r224_in1k)                       | 74.292 | 92.116 | 3.77        | 256      |\n| [mobilenetv4_conv_small.e2400_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e2400_r224_in1k)                       | 73.756 | 91.422 | 3.77        | 224      |\n| [mobilenetv4_conv_small.e1200_r224_in1k](http://hf.co/timm/mobilenetv4_conv_small.e1200_r224_in1k)                       | 73.454 | 91.34  | 3.77        | 224      |\n\n## Citation\n```bibtex\n@article{qin2024mobilenetv4,\n  title={MobileNetV4-Universal Models for the Mobile Ecosystem},\n  author={Qin, Danfeng and Leichner, Chas and Delakis, Manolis and Fornoni, Marco and Luo, Shixin and Yang, Fan and Wang, Weijun and Banbury, Colby and Ye, Chengxi and Akin, Berkin and others},\n  journal={arXiv preprint arXiv:2404.10518},\n  year={2024}\n}\n```\n```bibtex\n@misc{rw2019timm,\n  author = {Ross Wightman},\n  title = {PyTorch Image Models},\n  year = {2019},\n  publisher = {GitHub},\n  journal = {GitHub repository},\n  doi = {10.5281/zenodo.4414861},\n  howpublished = {\\url{https://github.com/huggingface/pytorch-image-models}}\n}\n```\n",
+              "extracted_code": "from urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model('mobilenetv4_conv_medium.e500_r224_in1k', pretrained=True)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\ntop5_probabilities, top5_class_indices = torch.topk(output.softmax(dim=1) * 100, k=5)\n\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_medium.e500_r224_in1k',\n    pretrained=True,\n    features_only=True,\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # unsqueeze single image into batch of 1\n\nfor o in output:\n    # print shape of each feature map in output\n    print(o.shape)\n\nfrom urllib.request import urlopen\nfrom PIL import Image\nimport timm\n\nimg = Image.open(urlopen(\n    'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'\n))\n\nmodel = timm.create_model(\n    'mobilenetv4_conv_medium.e500_r224_in1k',\n    pretrained=True,\n    num_classes=0,  # remove classifier nn.Linear\n)\nmodel = model.eval()\n\n# get model specific transforms (normalization, resize)\ndata_config = timm.data.resolve_model_data_config(model)\ntransforms = timm.data.create_transform(**data_config, is_training=False)\n\noutput = model(transforms(img).unsqueeze(0))  # output is (batch_size, num_features) shaped tensor\n\n# or equivalently (without needing to set num_classes=0)\n\noutput = model.forward_features(transforms(img).unsqueeze(0))\n# output is unpooled, a (1, 960, 7, 7) shaped tensor\n\noutput = model.forward_head(output, pre_logits=True)\n# output is a (1, num_features) shaped tensor"
+            },
+            {
+              "id": "aaa12963337/msi-resnet18-pretrain",
+              "author": "aaa12963337",
+              "sha": "5816c340d48a4debd08eaca9950424c36e13703c",
+              "created_at": "2023-12-15T06:52:06+00:00",
+              "last_modified": "2023-12-15T07:21:09+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 19,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "training_args.bin"
+                }
+              ],
+              "card_data": {
+                "license": "apache-2.0",
+                "language": [],
+                "tags": [
+                  "generated_from_trainer"
+                ],
+                "datasets": [
+                  "imagefolder"
+                ],
+                "base_model": "microsoft/resnet-18",
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [
+                  "accuracy"
+                ],
+                "widget": []
+              },
+              "tags": [
+                "transformers",
+                "safetensors",
+                "resnet",
+                "image-classification",
+                "generated_from_trainer",
+                "dataset:imagefolder",
+                "base_model:microsoft/resnet-18",
+                "base_model:finetune:microsoft/resnet-18",
+                "license:apache-2.0",
+                "model-index",
+                "autotrain_compatible",
+                "endpoints_compatible",
+                "region:us"
+              ],
+              "pipeline_tag": "image-classification",
+              "library_name": "transformers",
+              "readme": "---\nlicense: apache-2.0\nbase_model: microsoft/resnet-18\ntags:\n- generated_from_trainer\ndatasets:\n- imagefolder\nmetrics:\n- accuracy\nmodel-index:\n- name: msi-resnet18-pretrain\n  results:\n  - task:\n      name: Image Classification\n      type: image-classification\n    dataset:\n      name: imagefolder\n      type: imagefolder\n      config: default\n      split: validation\n      args: default\n    metrics:\n    - name: Accuracy\n      type: accuracy\n      value: 0.908774373259053\n---\n\n<!-- This model card has been generated automatically according to the information the Trainer had access to. You\nshould probably proofread and complete it, then remove this comment. -->\n\n# msi-resnet18-pretrain\n\nThis model is a fine-tuned version of [microsoft/resnet-18](https://huggingface.co/microsoft/resnet-18) on the imagefolder dataset.\nIt achieves the following results on the evaluation set:\n- Loss: 0.2966\n- Accuracy: 0.9088\n\n## Model description\n\nMore information needed\n\n## Intended uses & limitations\n\nMore information needed\n\n## Training and evaluation data\n\nMore information needed\n\n## Training procedure\n\n### Training hyperparameters\n\nThe following hyperparameters were used during training:\n- learning_rate: 1e-05\n- train_batch_size: 16\n- eval_batch_size: 16\n- seed: 42\n- gradient_accumulation_steps: 4\n- total_train_batch_size: 64\n- optimizer: Adam with betas=(0.9,0.999) and epsilon=1e-08\n- lr_scheduler_type: linear\n- lr_scheduler_warmup_ratio: 0.1\n- num_epochs: 4\n\n### Training results\n\n| Training Loss | Epoch | Step | Validation Loss | Accuracy |\n|:-------------:|:-----:|:----:|:---------------:|:--------:|\n| 0.2719        | 1.0   | 1562 | 0.3501          | 0.8891   |\n| 0.1611        | 2.0   | 3125 | 0.2813          | 0.9118   |\n| 0.166         | 3.0   | 4687 | 0.3161          | 0.8930   |\n| 0.1071        | 4.0   | 6248 | 0.2966          | 0.9088   |\n\n\n### Framework versions\n\n- Transformers 4.35.2\n- Pytorch 2.0.1+cu118\n- Datasets 2.15.0\n- Tokenizers 0.15.0\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "karlasb/matchingnet-imagenet",
+              "author": "karlasb",
+              "sha": "e6701e9dc1f4caee93b26351ed2db65d3cb7b62d",
+              "created_at": "2023-08-17T04:11:41+00:00",
+              "last_modified": "2023-08-17T21:29:00+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 0,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "matching_net_miniimagenet.zip"
+                }
+              ],
+              "card_data": {
+                "license": "mit",
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "license:mit",
+                "region:us"
+              ],
+              "readme": "---\nlicense: mit\n---\n",
+              "extracted_code": ""
+            }
+          ],
+          "datasets": [
+            {
+              "id": "timm/mini-imagenet",
+              "author": "timm",
+              "sha": "bd8779f9d33c061ea6e75fdd3bce4e43dd679060",
+              "created_at": "2024-11-20T22:17:09+00:00",
+              "last_modified": "2024-11-20T22:44:47+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 3703,
+              "likes": 13,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/test-00001-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00001-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00002-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00003-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00004-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00005-of-00013.parquet"
+                }
+              ],
+              "card_data": {
+                "license": "other",
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "10K<n<100K"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "license:other",
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "arxiv:1606.04080",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': n01532829\n          '1': n01558993\n          '2': n01704323\n          '3': n01749939\n          '4': n01770081\n          '5': n01843383\n          '6': n01855672\n          '7': n01910747\n          '8': n01930112\n          '9': n01981276\n          '10': n02074367\n          '11': n02089867\n          '12': n02091244\n          '13': n02091831\n          '14': n02099601\n          '15': n02101006\n          '16': n02105505\n          '17': n02108089\n          '18': n02108551\n          '19': n02108915\n          '20': n02110063\n          '21': n02110341\n          '22': n02111277\n          '23': n02113712\n          '24': n02114548\n          '25': n02116738\n          '26': n02120079\n          '27': n02129165\n          '28': n02138441\n          '29': n02165456\n          '30': n02174001\n          '31': n02219486\n          '32': n02443484\n          '33': n02457408\n          '34': n02606052\n          '35': n02687172\n          '36': n02747177\n          '37': n02795169\n          '38': n02823428\n          '39': n02871525\n          '40': n02950826\n          '41': n02966193\n          '42': n02971356\n          '43': n02981792\n          '44': n03017168\n          '45': n03047690\n          '46': n03062245\n          '47': n03075370\n          '48': n03127925\n          '49': n03146219\n          '50': n03207743\n          '51': n03220513\n          '52': n03272010\n          '53': n03337140\n          '54': n03347037\n          '55': n03400231\n          '56': n03417042\n          '57': n03476684\n          '58': n03527444\n          '59': n03535780\n          '60': n03544143\n          '61': n03584254\n          '62': n03676483\n          '63': n03770439\n          '64': n03773504\n          '65': n03775546\n          '66': n03838899\n          '67': n03854065\n          '68': n03888605\n          '69': n03908618\n          '70': n03924679\n          '71': n03980874\n          '72': n03998194\n          '73': n04067472\n          '74': n04146614\n          '75': n04149813\n          '76': n04243546\n          '77': n04251144\n          '78': n04258138\n          '79': n04275548\n          '80': n04296562\n          '81': n04389033\n          '82': n04418357\n          '83': n04435653\n          '84': n04443257\n          '85': n04509417\n          '86': n04515003\n          '87': n04522168\n          '88': n04596742\n          '89': n04604644\n          '90': n04612504\n          '91': n06794110\n          '92': n07584110\n          '93': n07613480\n          '94': n07697537\n          '95': n07747607\n          '96': n09246464\n          '97': n09256479\n          '98': n13054560\n          '99': n13133613\n  splits:\n  - name: train\n    num_bytes: 6284840508\n    num_examples: 50000\n  - name: validation\n    num_bytes: 1286953696\n    num_examples: 10000\n  - name: test\n    num_bytes: 670707560\n    num_examples: 5000\n  download_size: 7433461683\n  dataset_size: 8242501764\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: data/train-*\n  - split: validation\n    path: data/validation-*\n  - split: test\n    path: data/test-*\nlicense: other\nlicense_name: imagenet\nlicense_link: https://www.image-net.org/download.php\ntask_categories:\n- image-classification\npretty_name: Mini-ImageNet\nsize_categories:\n- 10K<n<100K\n---\n\n## Dataset Description\n\nA mini version of ImageNet-1k with 100 of 1000 classes present.\n\nUnlike some 'mini' variants this one includes the original images at their original sizes. Many such subsets downsample to 84x84 or other smaller resolutions.\n\n### Data Splits\n\n#### Train\n* 50000 samples from ImageNet-1k train split\n\n#### Validation\n* 10000 samples from ImageNet-1k train split\n\n#### Test\n* 5000 samples from ImageNet-1k validation split (all 50 samples per class)\n\n### Usage\n\nThis dataset is good for testing hparams and models in `timm`\n\n#### Train\n\n`python train.py --dataset hfds/timm/mini-imagenet --model resnet50 --amp --num-classes 100`\n\n### Citation Information\n\nFor the specific instance of this mini variant I am not sure what the origin is. It is different from commonly referenced [Vinyales et al.,2016](https://arxiv.org/abs/1606.04080) as it doesn't match the classes / splits.\n\nTrain & validation splits match train & test of https://www.kaggle.com/datasets/ctrnngtrung/miniimagenet ... it is not clear where that originated though.\n\nOriginal ImageNet citation:\n```bibtex\n@article{imagenet15russakovsky,\n    Author = {Olga Russakovsky and Jia Deng and Hao Su and Jonathan Krause and Sanjeev Satheesh and Sean Ma and Zhiheng Huang and Andrej Karpathy and Aditya Khosla and Michael Bernstein and Alexander C. Berg and Li Fei-Fei},\n    Title = { {ImageNet Large Scale Visual Recognition Challenge} },\n    Year = {2015},\n    journal   = {International Journal of Computer Vision (IJCV)},\n    doi = {10.1007/s11263-015-0816-y},\n    volume={115},\n    number={3},\n    pages={211-252}\n}\n```",
+              "extracted_code": ""
+            },
+            {
+              "id": "GATE-engine/cifarfs",
+              "author": "GATE-engine",
+              "sha": "a804c12cc85675b0a21d85a664c578f902b915ef",
+              "created_at": "2023-06-05T17:32:39+00:00",
+              "last_modified": "2023-06-05T17:32:51+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 159,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00001-6e06f87d92fce065.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00001-b2e0d12edcc41ca1.parquet"
+                },
+                {
+                  "rfilename": "data/validation-00000-of-00001-e04b38bd7284925d.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:pandas",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype: int64\n  splits:\n  - name: train\n    num_bytes: 86489157.0\n    num_examples: 38400\n  - name: validation\n    num_bytes: 21539635.0\n    num_examples: 9600\n  - name: test\n    num_bytes: 26600575.0\n    num_examples: 12000\n  download_size: 134961942\n  dataset_size: 134629367.0\n---\n# Dataset Card for \"cifarfs\"\n\n[More Information needed](https://github.com/huggingface/datasets/blob/main/CONTRIBUTING.md#how-to-contribute-to-the-dataset-cards)",
+              "extracted_code": ""
+            },
+            {
+              "id": "birder-project/CUB_200_2011",
+              "author": "birder-project",
+              "sha": "defe5f8142122ba6bdf5fb06e85afd05973cc7bb",
+              "created_at": "2024-10-03T03:54:29+00:00",
+              "last_modified": "2025-08-29T05:49:16+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 83,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "CUB_200_2011.tar"
+                },
+                {
+                  "rfilename": "README.md"
+                }
+              ],
+              "card_data": {
+                "license": "unknown",
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "10K<n<100K"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "license:unknown",
+                "size_categories:10K<n<100K",
+                "format:webdataset",
+                "modality:image",
+                "modality:text",
+                "library:datasets",
+                "library:webdataset",
+                "library:mlcroissant",
+                "region:us"
+              ],
+              "readme": "---\nlicense: unknown\ntask_categories:\n- image-classification\npretty_name: Caltech-UCSD Birds-200-2011\nsize_categories:\n- 10K<n<100K\n---\n\n# Caltech-UCSD Birds-200-2011\n\n## Dataset Summary\n\nThis is a repackaged version of the Caltech-UCSD Birds-200-2011 dataset for convenient use with PyTorch's `ImageFolder` class.\n\n**Note**: All credit goes to the original authors.\n\nThis upload only provides the same data in a different structure.\n\n- Website: <https://www.vision.caltech.edu/datasets/cub_200_2011/>\n- Paper: <https://authors.library.caltech.edu/records/cvm3y-5hh21>\n\n200 categories dataset consists of 11,788 images (1.1GB).\n\n## Citation\n\n```bibtex\n@article{wah_branson_welinder_perona_belongie_2011,\n         title={The Caltech-UCSD Birds-200-2011 Dataset},\n         abstractNote={CUB-200-2011 is an extended version of CUB-200 [7], a challenging dataset of 200 bird species. The extended version roughly doubles the number of images per category and adds new part localization annotations. All images are annotated with bounding boxes, part locations, and attribute labels. Images and annotations were filtered by multiple users of Mechanical Turk. We introduce benchmarks and baseline experiments for multi-class categorization and part localization.},\n         publisher={California Institute of Technology},\n         author={Wah, Catherine and Branson, Steve and Welinder, Peter and Perona, Pietro and Belongie, Serge},\n         year={2011},\n         month={Jul},\n}\n```\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "tanganke/stanford_cars",
+              "author": "tanganke",
+              "sha": "9abf6cf7d6dfa7b95152a0d6e791ea9435b47a40",
+              "created_at": "2024-04-25T20:15:28+00:00",
+              "last_modified": "2024-05-02T13:44:20+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 6096,
+              "likes": 19,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/contrast-00000-of-00001.parquet"
+                },
+                {
+                  "rfilename": "data/gaussian_noise-00000-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/gaussian_noise-00001-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/impulse_noise-00000-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/impulse_noise-00001-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/jpeg_compression-00000-of-00001.parquet"
+                },
+                {
+                  "rfilename": "data/motion_blur-00000-of-00001.parquet"
+                },
+                {
+                  "rfilename": "data/pixelate-00000-of-00001.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [
+                  "en"
+                ],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "100K<n<1M"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "language:en",
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\nlanguage:\n- en\nsize_categories:\n- 100K<n<1M\ntask_categories:\n- image-classification\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': AM General Hummer SUV 2000\n          '1': Acura RL Sedan 2012\n          '2': Acura TL Sedan 2012\n          '3': Acura TL Type-S 2008\n          '4': Acura TSX Sedan 2012\n          '5': Acura Integra Type R 2001\n          '6': Acura ZDX Hatchback 2012\n          '7': Aston Martin V8 Vantage Convertible 2012\n          '8': Aston Martin V8 Vantage Coupe 2012\n          '9': Aston Martin Virage Convertible 2012\n          '10': Aston Martin Virage Coupe 2012\n          '11': Audi RS 4 Convertible 2008\n          '12': Audi A5 Coupe 2012\n          '13': Audi TTS Coupe 2012\n          '14': Audi R8 Coupe 2012\n          '15': Audi V8 Sedan 1994\n          '16': Audi 100 Sedan 1994\n          '17': Audi 100 Wagon 1994\n          '18': Audi TT Hatchback 2011\n          '19': Audi S6 Sedan 2011\n          '20': Audi S5 Convertible 2012\n          '21': Audi S5 Coupe 2012\n          '22': Audi S4 Sedan 2012\n          '23': Audi S4 Sedan 2007\n          '24': Audi TT RS Coupe 2012\n          '25': BMW ActiveHybrid 5 Sedan 2012\n          '26': BMW 1 Series Convertible 2012\n          '27': BMW 1 Series Coupe 2012\n          '28': BMW 3 Series Sedan 2012\n          '29': BMW 3 Series Wagon 2012\n          '30': BMW 6 Series Convertible 2007\n          '31': BMW X5 SUV 2007\n          '32': BMW X6 SUV 2012\n          '33': BMW M3 Coupe 2012\n          '34': BMW M5 Sedan 2010\n          '35': BMW M6 Convertible 2010\n          '36': BMW X3 SUV 2012\n          '37': BMW Z4 Convertible 2012\n          '38': Bentley Continental Supersports Conv. Convertible 2012\n          '39': Bentley Arnage Sedan 2009\n          '40': Bentley Mulsanne Sedan 2011\n          '41': Bentley Continental GT Coupe 2012\n          '42': Bentley Continental GT Coupe 2007\n          '43': Bentley Continental Flying Spur Sedan 2007\n          '44': Bugatti Veyron 16.4 Convertible 2009\n          '45': Bugatti Veyron 16.4 Coupe 2009\n          '46': Buick Regal GS 2012\n          '47': Buick Rainier SUV 2007\n          '48': Buick Verano Sedan 2012\n          '49': Buick Enclave SUV 2012\n          '50': Cadillac CTS-V Sedan 2012\n          '51': Cadillac SRX SUV 2012\n          '52': Cadillac Escalade EXT Crew Cab 2007\n          '53': Chevrolet Silverado 1500 Hybrid Crew Cab 2012\n          '54': Chevrolet Corvette Convertible 2012\n          '55': Chevrolet Corvette ZR1 2012\n          '56': Chevrolet Corvette Ron Fellows Edition Z06 2007\n          '57': Chevrolet Traverse SUV 2012\n          '58': Chevrolet Camaro Convertible 2012\n          '59': Chevrolet HHR SS 2010\n          '60': Chevrolet Impala Sedan 2007\n          '61': Chevrolet Tahoe Hybrid SUV 2012\n          '62': Chevrolet Sonic Sedan 2012\n          '63': Chevrolet Express Cargo Van 2007\n          '64': Chevrolet Avalanche Crew Cab 2012\n          '65': Chevrolet Cobalt SS 2010\n          '66': Chevrolet Malibu Hybrid Sedan 2010\n          '67': Chevrolet TrailBlazer SS 2009\n          '68': Chevrolet Silverado 2500HD Regular Cab 2012\n          '69': Chevrolet Silverado 1500 Classic Extended Cab 2007\n          '70': Chevrolet Express Van 2007\n          '71': Chevrolet Monte Carlo Coupe 2007\n          '72': Chevrolet Malibu Sedan 2007\n          '73': Chevrolet Silverado 1500 Extended Cab 2012\n          '74': Chevrolet Silverado 1500 Regular Cab 2012\n          '75': Chrysler Aspen SUV 2009\n          '76': Chrysler Sebring Convertible 2010\n          '77': Chrysler Town and Country Minivan 2012\n          '78': Chrysler 300 SRT-8 2010\n          '79': Chrysler Crossfire Convertible 2008\n          '80': Chrysler PT Cruiser Convertible 2008\n          '81': Daewoo Nubira Wagon 2002\n          '82': Dodge Caliber Wagon 2012\n          '83': Dodge Caliber Wagon 2007\n          '84': Dodge Caravan Minivan 1997\n          '85': Dodge Ram Pickup 3500 Crew Cab 2010\n          '86': Dodge Ram Pickup 3500 Quad Cab 2009\n          '87': Dodge Sprinter Cargo Van 2009\n          '88': Dodge Journey SUV 2012\n          '89': Dodge Dakota Crew Cab 2010\n          '90': Dodge Dakota Club Cab 2007\n          '91': Dodge Magnum Wagon 2008\n          '92': Dodge Challenger SRT8 2011\n          '93': Dodge Durango SUV 2012\n          '94': Dodge Durango SUV 2007\n          '95': Dodge Charger Sedan 2012\n          '96': Dodge Charger SRT-8 2009\n          '97': Eagle Talon Hatchback 1998\n          '98': FIAT 500 Abarth 2012\n          '99': FIAT 500 Convertible 2012\n          '100': Ferrari FF Coupe 2012\n          '101': Ferrari California Convertible 2012\n          '102': Ferrari 458 Italia Convertible 2012\n          '103': Ferrari 458 Italia Coupe 2012\n          '104': Fisker Karma Sedan 2012\n          '105': Ford F-450 Super Duty Crew Cab 2012\n          '106': Ford Mustang Convertible 2007\n          '107': Ford Freestar Minivan 2007\n          '108': Ford Expedition EL SUV 2009\n          '109': Ford Edge SUV 2012\n          '110': Ford Ranger SuperCab 2011\n          '111': Ford GT Coupe 2006\n          '112': Ford F-150 Regular Cab 2012\n          '113': Ford F-150 Regular Cab 2007\n          '114': Ford Focus Sedan 2007\n          '115': Ford E-Series Wagon Van 2012\n          '116': Ford Fiesta Sedan 2012\n          '117': GMC Terrain SUV 2012\n          '118': GMC Savana Van 2012\n          '119': GMC Yukon Hybrid SUV 2012\n          '120': GMC Acadia SUV 2012\n          '121': GMC Canyon Extended Cab 2012\n          '122': Geo Metro Convertible 1993\n          '123': HUMMER H3T Crew Cab 2010\n          '124': HUMMER H2 SUT Crew Cab 2009\n          '125': Honda Odyssey Minivan 2012\n          '126': Honda Odyssey Minivan 2007\n          '127': Honda Accord Coupe 2012\n          '128': Honda Accord Sedan 2012\n          '129': Hyundai Veloster Hatchback 2012\n          '130': Hyundai Santa Fe SUV 2012\n          '131': Hyundai Tucson SUV 2012\n          '132': Hyundai Veracruz SUV 2012\n          '133': Hyundai Sonata Hybrid Sedan 2012\n          '134': Hyundai Elantra Sedan 2007\n          '135': Hyundai Accent Sedan 2012\n          '136': Hyundai Genesis Sedan 2012\n          '137': Hyundai Sonata Sedan 2012\n          '138': Hyundai Elantra Touring Hatchback 2012\n          '139': Hyundai Azera Sedan 2012\n          '140': Infiniti G Coupe IPL 2012\n          '141': Infiniti QX56 SUV 2011\n          '142': Isuzu Ascender SUV 2008\n          '143': Jaguar XK XKR 2012\n          '144': Jeep Patriot SUV 2012\n          '145': Jeep Wrangler SUV 2012\n          '146': Jeep Liberty SUV 2012\n          '147': Jeep Grand Cherokee SUV 2012\n          '148': Jeep Compass SUV 2012\n          '149': Lamborghini Reventon Coupe 2008\n          '150': Lamborghini Aventador Coupe 2012\n          '151': Lamborghini Gallardo LP 570-4 Superleggera 2012\n          '152': Lamborghini Diablo Coupe 2001\n          '153': Land Rover Range Rover SUV 2012\n          '154': Land Rover LR2 SUV 2012\n          '155': Lincoln Town Car Sedan 2011\n          '156': MINI Cooper Roadster Convertible 2012\n          '157': Maybach Landaulet Convertible 2012\n          '158': Mazda Tribute SUV 2011\n          '159': McLaren MP4-12C Coupe 2012\n          '160': Mercedes-Benz 300-Class Convertible 1993\n          '161': Mercedes-Benz C-Class Sedan 2012\n          '162': Mercedes-Benz SL-Class Coupe 2009\n          '163': Mercedes-Benz E-Class Sedan 2012\n          '164': Mercedes-Benz S-Class Sedan 2012\n          '165': Mercedes-Benz Sprinter Van 2012\n          '166': Mitsubishi Lancer Sedan 2012\n          '167': Nissan Leaf Hatchback 2012\n          '168': Nissan NV Passenger Van 2012\n          '169': Nissan Juke Hatchback 2012\n          '170': Nissan 240SX Coupe 1998\n          '171': Plymouth Neon Coupe 1999\n          '172': Porsche Panamera Sedan 2012\n          '173': Ram C/V Cargo Van Minivan 2012\n          '174': Rolls-Royce Phantom Drophead Coupe Convertible 2012\n          '175': Rolls-Royce Ghost Sedan 2012\n          '176': Rolls-Royce Phantom Sedan 2012\n          '177': Scion xD Hatchback 2012\n          '178': Spyker C8 Convertible 2009\n          '179': Spyker C8 Coupe 2009\n          '180': Suzuki Aerio Sedan 2007\n          '181': Suzuki Kizashi Sedan 2012\n          '182': Suzuki SX4 Hatchback 2012\n          '183': Suzuki SX4 Sedan 2012\n          '184': Tesla Model S Sedan 2012\n          '185': Toyota Sequoia SUV 2012\n          '186': Toyota Camry Sedan 2012\n          '187': Toyota Corolla Sedan 2012\n          '188': Toyota 4Runner SUV 2012\n          '189': Volkswagen Golf Hatchback 2012\n          '190': Volkswagen Golf Hatchback 1991\n          '191': Volkswagen Beetle Hatchback 2012\n          '192': Volvo C30 Hatchback 2012\n          '193': Volvo 240 Sedan 1993\n          '194': Volvo XC90 SUV 2007\n          '195': smart fortwo Convertible 2012\n  splits:\n  - name: train\n    num_bytes: 836228485.28\n    num_examples: 8144\n  - name: test\n    num_bytes: 820916696.759\n    num_examples: 8041\n  - name: contrast\n    num_bytes: 294933529.863\n    num_examples: 8041\n  - name: gaussian_noise\n    num_bytes: 788128272.904\n    num_examples: 8041\n  - name: impulse_noise\n    num_bytes: 906353753.057\n    num_examples: 8041\n  - name: jpeg_compression\n    num_bytes: 394863676.52\n    num_examples: 8041\n  - name: motion_blur\n    num_bytes: 372390215.301\n    num_examples: 8041\n  - name: pixelate\n    num_bytes: 7894555.938\n    num_examples: 8041\n  - name: spatter\n    num_bytes: 692942284.083\n    num_examples: 8041\n  download_size: 6016497364\n  dataset_size: 5114651469.705\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: data/train-*\n  - split: test\n    path: data/test-*\n  - split: contrast\n    path: data/contrast-*\n  - split: gaussian_noise\n    path: data/gaussian_noise-*\n  - split: impulse_noise\n    path: data/impulse_noise-*\n  - split: jpeg_compression\n    path: data/jpeg_compression-*\n  - split: motion_blur\n    path: data/motion_blur-*\n  - split: pixelate\n    path: data/pixelate-*\n  - split: spatter\n    path: data/spatter-*\n---\n\n# Stanford Cars Dataset\n\n## Dataset Overview\n\n- **Splits**:\n  - **Training**: 8144 images used for model training.\n  - **Test**: 8041 images used for evaluation.\n  - **Contrast**: 8041 images with high contrast for robustness testing.\n  - **Gaussian Noise**: 8041 images corrupted by Gaussian noise for robustness testing.\n  - **Impulse Noise**: 8041 images corrupted by impulse noise for robustness testing.\n  - **JPEG Compression**: 8041 compressed images for robustness testing.\n  - **Motion Blur**: 8041 images with motion blur for robustness testing.\n  - **Pixelate**: 8041 pixelated images for robustness testing.\n  - **Spatter**: 8041 images corrupted by spatter for robustness testing.\n\n\n## Usage Examples\n\n```python\nfrom datasets import load_dataset\n\n# Load the dataset in a tabular format with image URLs and metadata\ndataset = load_dataset(\"tanganke/stanford_cars\")\n\n# Access the training set directly\ntrain_set = dataset[\"train\"]\n```",
+              "extracted_code": "from datasets import load_dataset\n\ndataset = load_dataset(\"tanganke/stanford_cars\")\ntrain_set = dataset[\"train\"]"
+            },
+            {
+              "id": "Voxel51/FGVC-Aircraft",
+              "author": "Voxel51",
+              "sha": "bb367f92bf19d60f086b95b5aef117361201dfb5",
+              "created_at": "2024-07-01T21:18:09+00:00",
+              "last_modified": "2024-07-01T21:43:49+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 841,
+              "likes": 3,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/data_0/0034309.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0034958.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0037511.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0037512.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0038598.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0038626.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0038671.jpg"
+                },
+                {
+                  "rfilename": "data/data_0/0041419.jpg"
+                }
+              ],
+              "card_data": {
+                "license": "other",
+                "language": "en",
+                "tags": [
+                  "fiftyone",
+                  "image",
+                  "image-classification"
+                ],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "10K<n<100K"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "language:en",
+                "license:other",
+                "size_categories:10K<n<100K",
+                "format:imagefolder",
+                "modality:image",
+                "library:datasets",
+                "library:mlcroissant",
+                "library:fiftyone",
+                "arxiv:1306.5151",
+                "region:us",
+                "fiftyone",
+                "image",
+                "image-classification"
+              ],
+              "readme": "---\nannotations_creators: []\nlanguage: en\nlicense: other\nsize_categories:\n- 10K<n<100K\ntask_categories:\n- image-classification\ntask_ids: []\npretty_name: FGVC-Aircraft\ntags:\n- fiftyone\n- image\n- image-classification\ndataset_summary: '\n\n\n\n  ![image/png](dataset_preview.gif)\n\n\n\n  This is a [FiftyOne](https://github.com/voxel51/fiftyone) dataset with 10000 samples.\n\n\n  ## Installation\n\n\n  If you haven''t already, install FiftyOne:\n\n\n  ```bash\n\n  pip install -U fiftyone\n\n  ```\n\n\n  ## Usage\n\n\n  ```python\n\n  import fiftyone as fo\n\n  import fiftyone.utils.huggingface as fouh\n\n\n  # Load the dataset\n\n  # Note: other available arguments include ''max_samples'', etc\n\n  dataset = fouh.load_from_hub(\"Voxel51/FGVC-Aircraft\")\n\n\n  # Launch the App\n\n  session = fo.launch_app(dataset)\n\n  ```\n\n  '\n---\n\n# Dataset Card for FGVC-Aircraft\n\n<!-- Provide a quick summary of the dataset. -->\n\n\n\n\n![image/png](dataset_preview.gif)\n\n\nThis is a [FiftyOne](https://github.com/voxel51/fiftyone) dataset with 10000 samples.\n\n## Installation\n\nIf you haven't already, install FiftyOne:\n\n```bash\npip install -U fiftyone\n```\n\n## Usage\n\n```python\nimport fiftyone as fo\nimport fiftyone.utils.huggingface as fouh\n\n# Load the dataset\n# Note: other available arguments include 'max_samples', etc\ndataset = fouh.load_from_hub(\"Voxel51/FGVC-Aircraft\")\n\n# Launch the App\nsession = fo.launch_app(dataset)\n```\n\n\n## Dataset Details\n\n### Dataset Description\n\nFine-Grained Visual Classification of Aircraft (FGVC-Aircraft) is a benchmark dataset for the fine grained visual categorization of aircraft.\n\n**Note** This data has been used as part of the ImageNet FGVC challenge in conjuction with the International Conference on Computer Vision (ICCV) 2013. Test labels were not made available until the challenge due to the ImageNet challenge policy. They have now been released as part of the download above. If you arelady downloaded the iamge archive and want to have access to the test labels, simply download the annotations archive again.\n\n**Note** Images in the benchmark are generously made available for non-commercial research purposes only by a number of airplane spotters. Please note that the original authors retain the copyright of the respective photographs and should be contacted for any other use. For further details see the copyright note below.\n\n\n- **Language(s) (NLP):** en\n- **License:** other\n\n### Dataset Sources\n\n<!-- Provide the basic links for the dataset. -->\n\n- **Homepage:** https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/#format\n- **Paper:** [Towards a Detailed Understanding of Objects and Scenes in Natural Images](http://www.clsp.jhu.edu/workshops/archive/ws-12/groups/tduosn/)\n\n\n## Dataset Structure\n\nThe dataset contains 10,200 images of aircraft, with 100 images for each of 102 different aircraft model variants, most of which are airplanes. The (main) aircraft in each image is annotated with a tight bounding box and a hierarchical airplane model label.\n\nAircraft models are organized in a four-levels hierarchy. The four levels, from finer to coarser, are:\n\n- **Model**, e.g. *Boeing 737-76J*. Since certain models are nearly visually indistinguishable, this level is not used in the evaluation.\n- **Variant**, e.g. *Boeing 737-700*. A variant collapses all the models that are visually indistinguishable into one class. The dataset comprises 102 different variants.\n- **Family**, e.g. *Boeing 737*. The dataset comprises 70 different families.\n- **Manufacturer**, e.g. *Boeing*. The dataset comprises 41 different manufacturers.\n\nThe data is divided into three equally-sized training, validation and test subsets. The first two sets can be used for development, and the latter should be used for final evaluation only. The format of the data is described next.\n\n## Dataset Creation\n\n<!-- This section describes the people or systems who originally created the data. It should also include self-reported demographic or identity information for the source data creators if this information is available. -->\n\nThe creation of this dataset started during the Johns Hopkins CLSP Summer Workshop 2012 [Towards a Detailed Understanding of Objects and Scenes in Natural Images](http://www.clsp.jhu.edu/workshops/archive/ws-12/groups/tduosn/) with, in alphabetical order, Matthew B. Blaschko, Ross B. Girshick, Juho Kannala, Iasonas Kokkinos, Siddharth Mahendran, Subhransu Maji, Sammy Mohamed, Esa Rahtu, Naomi Saphra, Karen Simonyan, Ben Taskar, Andrea Vedaldi, and David Weiss.\n\nThe CLSP workshop was supported by the National Science Foundation via Grant No 1005411, the Office of the Director of National Intelligence via the JHU Human Language Technology Center of Excellence; and Google Inc.\n\nA special thanks goes to Pekka Rantalankila for helping with the creation of the airplane hieararchy.\n\nMany thanks to the photographers that kindly made available their images for research purposes. Each photographer is listed below, along with a link to his/her [airlners.net](http://airliners.net/) page:\n\n- [Mick Bajcar](http://www.airliners.net/profile/dendrobatid)\n- [Aldo Bidini](http://www.airliners.net/profile/aldobid)\n- [Wim Callaert](http://www.airliners.net/profile/minoeke)\n- [Tommy Desmet](http://www.airliners.net/profile/tommypilot)\n- [Thomas Posch](http://www.airliners.net/profile/snorre)\n- [James Richard Covington](http://www.airliners.net/profile/lemonkitty)\n- [Gerry Stegmeier](http://www.airliners.net/profile/stegi)\n- [Ben Wang](http://www.airliners.net/profile/aal151heavy)\n- [Darren Wilson](http://www.airliners.net/profile/dazbo5)\n- [Konstantin von Wedelstaedt](http://www.airliners.net/profile/fly-k)\n- \nPlease note that the images are made available **exclusively for non-commercial research purposes**. The original authors retain the copyright on the respective pictures and should be contacted for any other usage of them.\n\n## Citation\n<!-- If there is a paper or blog post introducing the dataset, the APA and Bibtex information for that should go in this section. -->\n\n**BibTeX:**\n\n```bibtex\n@techreport{maji13fine-grained,\n   title         = {Fine-Grained Visual Classification of Aircraft},\n   author        = {S. Maji and J. Kannala and E. Rahtu\n                    and M. Blaschko and A. Vedaldi},\n   year          = {2013},\n   archivePrefix = {arXiv},\n   eprint        = {1306.5151},\n   primaryClass  = \"cs-cv\",\n}\n```\n\n## Dataset Card Author\n\n[Jacob Marks](https://huggingface.co/jamarks)",
+              "extracted_code": "import fiftyone as fo\nimport fiftyone.utils.huggingface as fouh\n\n# Load the dataset\n# Note: other available arguments include 'max_samples', etc\ndataset = fouh.load_from_hub(\"Voxel51/FGVC-Aircraft\")\n\n# Launch the App\nsession = fo.launch_app(dataset)"
+            },
+            {
+              "id": "Xenova/quickdraw",
+              "author": "Xenova",
+              "sha": "de9b29bd9db84c6d0c7e9145c15a996025da87e6",
+              "created_at": "2023-06-23T21:18:53+00:00",
+              "last_modified": "2023-06-24T15:04:27+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 456,
+              "likes": 10,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00040-29138c3afe7b0fac.parquet"
+                },
+                {
+                  "rfilename": "data/train-00001-of-00040-8f485f232be573b8.parquet"
+                },
+                {
+                  "rfilename": "data/train-00002-of-00040-1d35a96c1b9130b2.parquet"
+                },
+                {
+                  "rfilename": "data/train-00003-of-00040-e8c07326383f24ff.parquet"
+                },
+                {
+                  "rfilename": "data/train-00004-of-00040-1993a15c0a510382.parquet"
+                },
+                {
+                  "rfilename": "data/train-00005-of-00040-bb312d1d0f403cd7.parquet"
+                },
+                {
+                  "rfilename": "data/train-00006-of-00040-621673dfd190003d.parquet"
+                },
+                {
+                  "rfilename": "data/train-00007-of-00040-4f9708142684de41.parquet"
+                }
+              ],
+              "card_data": {
+                "license": [
+                  "cc-by-4.0"
+                ],
+                "language": [
+                  "en"
+                ],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "10M<n<100M"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "task_ids:multi-class-image-classification",
+                "annotations_creators:machine-generated",
+                "language_creators:crowdsourced",
+                "multilinguality:monolingual",
+                "source_datasets:original",
+                "language:en",
+                "license:cc-by-4.0",
+                "size_categories:10M<n<100M",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\nannotations_creators:\n- machine-generated\nlanguage_creators:\n- crowdsourced\nlanguage:\n- en\nlicense:\n- cc-by-4.0\nmultilinguality:\n- monolingual\nsize_categories:\n- 10M<n<100M\nsource_datasets:\n- original\ntask_categories:\n- image-classification\ntask_ids:\n- multi-class-image-classification\npaperswithcode_id: quick-draw-dataset\npretty_name: Quick, Draw!\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': aircraft carrier\n          '1': airplane\n          '2': alarm clock\n          '3': ambulance\n          '4': angel\n          '5': animal migration\n          '6': ant\n          '7': anvil\n          '8': apple\n          '9': arm\n          '10': asparagus\n          '11': axe\n          '12': backpack\n          '13': banana\n          '14': bandage\n          '15': barn\n          '16': baseball bat\n          '17': baseball\n          '18': basket\n          '19': basketball\n          '20': bat\n          '21': bathtub\n          '22': beach\n          '23': bear\n          '24': beard\n          '25': bed\n          '26': bee\n          '27': belt\n          '28': bench\n          '29': bicycle\n          '30': binoculars\n          '31': bird\n          '32': birthday cake\n          '33': blackberry\n          '34': blueberry\n          '35': book\n          '36': boomerang\n          '37': bottlecap\n          '38': bowtie\n          '39': bracelet\n          '40': brain\n          '41': bread\n          '42': bridge\n          '43': broccoli\n          '44': broom\n          '45': bucket\n          '46': bulldozer\n          '47': bus\n          '48': bush\n          '49': butterfly\n          '50': cactus\n          '51': cake\n          '52': calculator\n          '53': calendar\n          '54': camel\n          '55': camera\n          '56': camouflage\n          '57': campfire\n          '58': candle\n          '59': cannon\n          '60': canoe\n          '61': car\n          '62': carrot\n          '63': castle\n          '64': cat\n          '65': ceiling fan\n          '66': cell phone\n          '67': cello\n          '68': chair\n          '69': chandelier\n          '70': church\n          '71': circle\n          '72': clarinet\n          '73': clock\n          '74': cloud\n          '75': coffee cup\n          '76': compass\n          '77': computer\n          '78': cookie\n          '79': cooler\n          '80': couch\n          '81': cow\n          '82': crab\n          '83': crayon\n          '84': crocodile\n          '85': crown\n          '86': cruise ship\n          '87': cup\n          '88': diamond\n          '89': dishwasher\n          '90': diving board\n          '91': dog\n          '92': dolphin\n          '93': donut\n          '94': door\n          '95': dragon\n          '96': dresser\n          '97': drill\n          '98': drums\n          '99': duck\n          '100': dumbbell\n          '101': ear\n          '102': elbow\n          '103': elephant\n          '104': envelope\n          '105': eraser\n          '106': eye\n          '107': eyeglasses\n          '108': face\n          '109': fan\n          '110': feather\n          '111': fence\n          '112': finger\n          '113': fire hydrant\n          '114': fireplace\n          '115': firetruck\n          '116': fish\n          '117': flamingo\n          '118': flashlight\n          '119': flip flops\n          '120': floor lamp\n          '121': flower\n          '122': flying saucer\n          '123': foot\n          '124': fork\n          '125': frog\n          '126': frying pan\n          '127': garden hose\n          '128': garden\n          '129': giraffe\n          '130': goatee\n          '131': golf club\n          '132': grapes\n          '133': grass\n          '134': guitar\n          '135': hamburger\n          '136': hammer\n          '137': hand\n          '138': harp\n          '139': hat\n          '140': headphones\n          '141': hedgehog\n          '142': helicopter\n          '143': helmet\n          '144': hexagon\n          '145': hockey puck\n          '146': hockey stick\n          '147': horse\n          '148': hospital\n          '149': hot air balloon\n          '150': hot dog\n          '151': hot tub\n          '152': hourglass\n          '153': house plant\n          '154': house\n          '155': hurricane\n          '156': ice cream\n          '157': jacket\n          '158': jail\n          '159': kangaroo\n          '160': key\n          '161': keyboard\n          '162': knee\n          '163': knife\n          '164': ladder\n          '165': lantern\n          '166': laptop\n          '167': leaf\n          '168': leg\n          '169': light bulb\n          '170': lighter\n          '171': lighthouse\n          '172': lightning\n          '173': line\n          '174': lion\n          '175': lipstick\n          '176': lobster\n          '177': lollipop\n          '178': mailbox\n          '179': map\n          '180': marker\n          '181': matches\n          '182': megaphone\n          '183': mermaid\n          '184': microphone\n          '185': microwave\n          '186': monkey\n          '187': moon\n          '188': mosquito\n          '189': motorbike\n          '190': mountain\n          '191': mouse\n          '192': moustache\n          '193': mouth\n          '194': mug\n          '195': mushroom\n          '196': nail\n          '197': necklace\n          '198': nose\n          '199': ocean\n          '200': octagon\n          '201': octopus\n          '202': onion\n          '203': oven\n          '204': owl\n          '205': paint can\n          '206': paintbrush\n          '207': palm tree\n          '208': panda\n          '209': pants\n          '210': paper clip\n          '211': parachute\n          '212': parrot\n          '213': passport\n          '214': peanut\n          '215': pear\n          '216': peas\n          '217': pencil\n          '218': penguin\n          '219': piano\n          '220': pickup truck\n          '221': picture frame\n          '222': pig\n          '223': pillow\n          '224': pineapple\n          '225': pizza\n          '226': pliers\n          '227': police car\n          '228': pond\n          '229': pool\n          '230': popsicle\n          '231': postcard\n          '232': potato\n          '233': power outlet\n          '234': purse\n          '235': rabbit\n          '236': raccoon\n          '237': radio\n          '238': rain\n          '239': rainbow\n          '240': rake\n          '241': remote control\n          '242': rhinoceros\n          '243': rifle\n          '244': river\n          '245': roller coaster\n          '246': rollerskates\n          '247': sailboat\n          '248': sandwich\n          '249': saw\n          '250': saxophone\n          '251': school bus\n          '252': scissors\n          '253': scorpion\n          '254': screwdriver\n          '255': sea turtle\n          '256': see saw\n          '257': shark\n          '258': sheep\n          '259': shoe\n          '260': shorts\n          '261': shovel\n          '262': sink\n          '263': skateboard\n          '264': skull\n          '265': skyscraper\n          '266': sleeping bag\n          '267': smiley face\n          '268': snail\n          '269': snake\n          '270': snorkel\n          '271': snowflake\n          '272': snowman\n          '273': soccer ball\n          '274': sock\n          '275': speedboat\n          '276': spider\n          '277': spoon\n          '278': spreadsheet\n          '279': square\n          '280': squiggle\n          '281': squirrel\n          '282': stairs\n          '283': star\n          '284': steak\n          '285': stereo\n          '286': stethoscope\n          '287': stitches\n          '288': stop sign\n          '289': stove\n          '290': strawberry\n          '291': streetlight\n          '292': string bean\n          '293': submarine\n          '294': suitcase\n          '295': sun\n          '296': swan\n          '297': sweater\n          '298': swing set\n          '299': sword\n          '300': syringe\n          '301': t-shirt\n          '302': table\n          '303': teapot\n          '304': teddy-bear\n          '305': telephone\n          '306': television\n          '307': tennis racquet\n          '308': tent\n          '309': The Eiffel Tower\n          '310': The Great Wall of China\n          '311': The Mona Lisa\n          '312': tiger\n          '313': toaster\n          '314': toe\n          '315': toilet\n          '316': tooth\n          '317': toothbrush\n          '318': toothpaste\n          '319': tornado\n          '320': tractor\n          '321': traffic light\n          '322': train\n          '323': tree\n          '324': triangle\n          '325': trombone\n          '326': truck\n          '327': trumpet\n          '328': umbrella\n          '329': underwear\n          '330': van\n          '331': vase\n          '332': violin\n          '333': washing machine\n          '334': watermelon\n          '335': waterslide\n          '336': whale\n          '337': wheel\n          '338': windmill\n          '339': wine bottle\n          '340': wine glass\n          '341': wristwatch\n          '342': yoga\n          '343': zebra\n          '344': zigzag\n  splits:\n  - name: train\n    num_bytes: 19761125464.75\n    num_examples: 50426266\n  download_size: 18927763475\n  dataset_size: 19761125464.75\n---\n\n# Dataset Card for Quick, Draw!\n\nThis is a processed version of Google's [Quick, Draw](https://huggingface.co/datasets/quickdraw/) dataset to be compatible with the latest versions of 🤗 Datasets that support .parquet files. NOTE: this dataset only contains the \"preprocessed_bitmaps\" subset of the original dataset.\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "GATE-engine/fungi",
+              "author": "GATE-engine",
+              "sha": "1dbf2ce80ba062ca0e78be16ed38dde649c31151",
+              "created_at": "2023-06-05T00:42:00+00:00",
+              "last_modified": "2023-06-05T16:36:25+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 48,
+              "likes": 1,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00003-737358710f362d33.parquet"
+                },
+                {
+                  "rfilename": "data/test-00001-of-00003-588d137478245d3b.parquet"
+                },
+                {
+                  "rfilename": "data/test-00002-of-00003-b0d1e6651010178d.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00013-bd0da2afac4a64e5.parquet"
+                },
+                {
+                  "rfilename": "data/train-00001-of-00013-81e60bbc712f918a.parquet"
+                },
+                {
+                  "rfilename": "data/train-00002-of-00013-07741d798bc460b2.parquet"
+                },
+                {
+                  "rfilename": "data/train-00003-of-00013-91a25b78a1833401.parquet"
+                },
+                {
+                  "rfilename": "data/train-00004-of-00013-51631a2db529c830.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype: int64\n  splits:\n  - name: train\n    num_bytes: 6188400790.875\n    num_examples: 64449\n  - name: validation\n    num_bytes: 1173258274.625\n    num_examples: 12195\n  - name: test\n    num_bytes: 1260333216.5\n    num_examples: 13116\n  download_size: 835444680\n  dataset_size: 8621992282.0\n---\n# Dataset Card for \"fungi\"\n\n[More Information needed](https://github.com/huggingface/datasets/blob/main/CONTRIBUTING.md#how-to-contribute-to-the-dataset-cards)",
+              "extracted_code": ""
+            }
+          ]
+        }
+      }
     }
   },
   "idea_info_history": [
