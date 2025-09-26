@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The methodology involves a theoretical investigation of feature learning in a two-layer CNN network, using a data model that simulates invariant and spurious features with varying correlation degrees. This analysis reveals that ERM learns both feature types, but prioritizes spurious ones. It also shows that OOD objectives like IRMv1 primarily amplify existing features rather than learning new ones. Building on these insights, Feature Augmented Training (FeAT) is introduced as an iterative algorithm. In each round, FeAT separates the training data into 'retention' (already learned features) and 'augmentation' (new features) subsets based on prediction correctness. It then performs Distributionally Robust Optimization (DRO) on these grouped subsets to explore new features while retaining previously learned ones. The final classifier is an average of historical classifiers. A lightweight variant, iFeAT, retains only the latest subsets and classifiers to reduce overhead.
+
+# GitHub URLs List
+['https://github.com/LFhase/FeAT', 'https://github.com/TjuJianyu/RFC', 'https://github.com/YugeTen/fish', 'https://github.com/TjuJianyu/RFC', 'https://github.com/izmailovpavel/spurious_feature_learning', 'https://github.com/pytorch/captum']
+Output:
+{
+    "index": 0
+}
