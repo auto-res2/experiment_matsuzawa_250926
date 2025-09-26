@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed protoLP method iteratively refines prototypes and a learnable graph. It uses a parameterized label prediction step with a linear projection (A) to limit overfitting to the adjacency matrix. A prototype-based graph construction method is introduced where the adjacency matrix (W) is formed from the relation between prototypes and samples (partial assignment Z), allowing the graph to change as prototypes are updated. The model is optimized by alternating updates for assignments (Z), label projection (A), and prototypes (C). Prototypes (C) are initialized as mean vectors of support samples and updated using a weighted average of samples based on soft label scores and an exponential running average. For inference, pseudo-labels are predicted by maximizing soft label scores. Optionally, the Sinkhorn-Knopp algorithm can be used for normalization to incorporate a uniform class prior, though protoLP aims to be robust without it.
+
+# GitHub URLs List
+['https://github.com/allenhaozhu/protoLP', 'https://github.com/allenhaozhu/protoLP']
+Output:
+{
+    "index": 0
+}
