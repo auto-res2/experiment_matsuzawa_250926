@@ -6,5 +6,82 @@
     "transductive prototypical networks",
     "distribution calibration few-shot",
     "feature augmentation few-shot"
+  ],
+  "research_study_list": [
+    {
+      "title": "A Closer Look at Prototype Classifier for Few-shot Image Classification"
+    },
+    {
+      "title": "FeCAM: Exploiting the Heterogeneity of Class Distributions in Exemplar-Free Continual Learning"
+    },
+    {
+      "title": "This Looks Like It Rather Than That: ProtoKNN For Similarity-Based Classifiers"
+    },
+    {
+      "title": "A Theoretical Analysis of the Number of Shots in Few-Shot Learning"
+    },
+    {
+      "title": "Revisiting Prototypical Network for Cross Domain Few-Shot Learning"
+    },
+    {
+      "title": "Unraveling Meta-Learning: Understanding Feature Representations for Few-Shot Tasks"
+    },
+    {
+      "title": "Few-shot Image Generation with Elastic Weight Consolidation"
+    },
+    {
+      "title": "GeCoNeRF: Few-shot Neural Radiance Fields via Geometric Consistency"
+    },
+    {
+      "title": "Meta-Learning without Memorization"
+    },
+    {
+      "title": "Laplacian Regularized Few-Shot Learning"
+    },
+    {
+      "title": "Transductive Few-Shot Learning With Prototype-Based Label Propagation by Iterative Graph Refinement"
+    },
+    {
+      "title": "Parameterless Transductive Feature Re-representation for Few-Shot Learning"
+    },
+    {
+      "title": "Laplacian Regularized Few-Shot Learning"
+    },
+    {
+      "title": "FeCAM: Exploiting the Heterogeneity of Class Distributions in Exemplar-Free Continual Learning"
+    },
+    {
+      "title": "Empirical Bayes Transductive Meta-Learning with Synthetic Gradients"
+    },
+    {
+      "title": "Adaptive Distribution Calibration for Few-Shot Learning with Hierarchical Optimal Transport"
+    },
+    {
+      "title": "Free Lunch for Few-shot Learning:  Distribution Calibration"
+    },
+    {
+      "title": "Free Lunch for Few-shot Learning:  Distribution Calibration"
+    },
+    {
+      "title": "Robust Calibration with Multi-domain Temperature Scaling"
+    },
+    {
+      "title": "Transferable Calibration with Lower Bias and Variance in Domain Adaptation"
+    },
+    {
+      "title": "Frozen Feature Augmentation for Few-Shot Image Classification"
+    },
+    {
+      "title": "Understanding and Improving Feature Learning for Out-of-Distribution Generalization"
+    },
+    {
+      "title": "Cross-Domain Few-Shot Classification via Learned Feature-Wise Transformation"
+    },
+    {
+      "title": "Exact Fusion via Feature Distribution Matching for Few-shot Image Generation"
+    },
+    {
+      "title": "Hint-Aug: Drawing Hints From Foundation Vision Transformers Towards Boosted Few-Shot Parameter-Efficient Tuning"
+    }
   ]
 }
