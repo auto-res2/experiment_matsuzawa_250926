@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The method involves extracting frozen features from pretrained vision transformers (e.g., ViT outputs) and then applying augmentations in this feature space before training a lightweight model on top. Features, typically 2D (N patches x C channels), are first reshaped to a 3D representation (sqrt(N) x sqrt(N) x C) to align with image augmentation structures. A deterministic feature-to-image mapping scales feature values to a standard image range (e.g., [0,1]), on which standard image augmentations are applied. The augmented 'image-like' features are then mapped back to their original feature value range. Three FroFA variations are explored: Default FroFA (single random value across the entire feature), Channel FroFA (independent random values per channel), and Channel2 FroFA (independent random values per channel, with per-channel min/max scaling). A lightweight multi-head attention pooling (MAP) layer followed by a classification layer is trained on these augmented frozen features. Baselines include a MAP head without augmentation and an L2-regularized linear probe.
+
+# GitHub URLs List
+['https://github.com/google-research/big_vision', 'https://github.com/google-research/scenic']
+Output:
+{
+    "index": 0
+}
