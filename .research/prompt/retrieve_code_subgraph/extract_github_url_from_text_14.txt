@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The methodology is built upon an empirical Bayes (EB) formulation for multi-task learning, which is optimized using amortized variational inference. A transductive inference scheme is adopted, where the variational posterior is a function of both the labeled support set (dl_t) and the unlabeled query set (x_t). This is implemented by mimicking an exact inference optimization process through parameterized components: an initialization network (λ) and a synthetic gradient network (ξ). The initialization network (λ) provides an initial model weight (θ0_t), which can be global or computed from the support set. The synthetic gradient network (ξ) generates a surrogate for the inaccessible true gradient (∂ℓ/∂ŷ_t,i) of the task-specific loss, enabling synthetic gradient descent steps on the unlabeled query set (x_t) to update θ_t without ground-truth labels. The overall meta-model (φ = (λ, ξ)) and meta-parameters (ψ for the prior, f for the feature network) are optimized to maximize the Evidence Lower Bound (ELBO). The method is theoretically connected to a multi-task extension of the information bottleneck principle.
+
+# GitHub URLs List
+['https://github.com/amzn/xfer']
+Output:
+{
+    "index": 0
+}
