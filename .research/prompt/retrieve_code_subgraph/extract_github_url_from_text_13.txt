@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The study analyzes meta-learning within its inner and outer loop framework, focusing on algorithms that either update only the linear classifier layer (e.g., R2-D2, MetaOptNet) or use metric learning approaches (e.g., ProtoNet, MCT) that freeze feature extraction layers. Four distinct data augmentation modes are introduced: support, query, task, and shot augmentation. A pool of augmentation techniques, including standard methods (horizontal flips, random crops, color jitter), CutMix, MixUp, Self-Mix, Rotation, Random Erase, Combining Labels, Feature Mixup, Drop Channel, and Solarize, are applied within these modes. The core methodology is Meta-MaxUp, an extension of the MaxUp strategy, which selects 'm' augmentations from a predefined pool for each task during training and applies the one that maximizes loss to perform parameter updates, effectively solving a minimax optimization problem.
+
+# GitHub URLs List
+['https://github.com/RenkunNi/MetaAug']
+Output:
+{
+    "index": 0
+}
