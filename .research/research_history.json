@@ -6,5 +6,82 @@
     "prototype augmentation",
     "few-shot domain generalization",
     "metric learning regularization"
+  ],
+  "research_study_list": [
+    {
+      "title": "A Closer Look at Prototype Classifier for Few-shot Image Classification"
+    },
+    {
+      "title": "FeCAM: Exploiting the Heterogeneity of Class Distributions in Exemplar-Free Continual Learning"
+    },
+    {
+      "title": "This Looks Like It Rather Than That: ProtoKNN For Similarity-Based Classifiers"
+    },
+    {
+      "title": "HYPO: Hyperspherical Out-Of-Distribution Generalization"
+    },
+    {
+      "title": "Revisiting Prototypical Network for Cross Domain Few-Shot Learning"
+    },
+    {
+      "title": "Unraveling Meta-Learning: Understanding Feature Representations for Few-Shot Tasks"
+    },
+    {
+      "title": "Effective Meta-Regularization by Kernelized Proximal Regularization"
+    },
+    {
+      "title": "Meta-Learning without Memorization"
+    },
+    {
+      "title": "Improving Generalization of Meta-Learning With Inverted Regularization at Inner-Level"
+    },
+    {
+      "title": "Towards Sample-efficient Overparameterized Meta-learning"
+    },
+    {
+      "title": "Learning to Recombine and Resample Data For Compositional Generalization"
+    },
+    {
+      "title": "Scribble-Supervised Semantic Segmentation with Prototype-based Feature Augmentation"
+    },
+    {
+      "title": "Learning Sparse Prototypes for Text Generation"
+    },
+    {
+      "title": "Data Augmentation for Meta-Learning"
+    },
+    {
+      "title": "Hunting Attributes: Context Prototype-Aware Learning for Weakly Supervised Semantic Segmentation"
+    },
+    {
+      "title": "Bi-Level Meta-Learning for Few-Shot Domain Generalization"
+    },
+    {
+      "title": "Cross-Domain Few-Shot Classification via Learned Feature-Wise Transformation"
+    },
+    {
+      "title": "Learning a Universal Template for Few-shot Dataset Generalization"
+    },
+    {
+      "title": "Few-shot Image Generation with Elastic Weight Consolidation"
+    },
+    {
+      "title": "Domain Generalization via Entropy Regularization"
+    },
+    {
+      "title": "Revisiting Training Strategies and Generalization Performance in Deep Metric Learning"
+    },
+    {
+      "title": "HIER: Metric Learning Beyond Class Labels via Hierarchical Regularization"
+    },
+    {
+      "title": "LDReg: Local Dimensionality Regularized Self-Supervised Learning"
+    },
+    {
+      "title": "Generalization Bound of Gradient Descent for Non-Convex Metric Learning"
+    },
+    {
+      "title": "Unraveling Meta-Learning: Understanding Feature Representations for Few-Shot Tasks"
+    }
   ]
 }
