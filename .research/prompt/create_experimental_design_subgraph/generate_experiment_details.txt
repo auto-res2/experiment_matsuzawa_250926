@@ -1,0 +1,133 @@
+
+Input:
+You are a cutting-edge AI researcher. Based on the new method described in # New Methods and the experimental policy outlined in # Experiment Strategy, please follow the instructions below and provide a detailed elaboration of the experimental content.
+
+# Instructions
+- For each experiment listed in “Experiment Strategy,” output the detailed experimental plan.
+- Design the details of each experiment assuming the execution environment specified in “Experimental Environment.”
+- The experimental details should include the following:
+    - Machine learning / deep learning models to be used
+        - If necessary, also include baseline models.
+    - Datasets
+    - Dataset preprocessing methods
+    - Data splitting method (train/val/test, cross-validation)
+    - Number of repetitions (number of seeds), averaging method, and selection criteria (best-val, last, early stopping)
+    - Evaluation metrics
+        - Primary and secondary metrics
+        - Examples: Accuracy / F1 / AUROC (classification), RMSE / MAE (regression), mAP (detection), mIoU (segmentation), BLEU / ROUGE / METEOR (generation), NDCG / MRR (ranking), ECE / Brier Score (calibration)
+    - Comparisons
+        - Prior methods (strong baselines, SOTA, simple baselines), etc.
+        - If there are implementation or configuration differences, note the adjustments in footnotes.
+    - Methods for analyzing important hyperparameters (e.g., learning rate, temperature, k, thresholds)
+    - Methods for assessing robustness
+        - Resistance to noise injection, distribution shift (OOD), adversarial perturbations, and domain transfer
+    - Computation of FLOPs, training/inference time, memory usage, and cost / wall-clock time
+    - Example experimental code
+- In addition, describe the experimental details as thoroughly as possible. It is acceptable if the output is long.
+- Avoid excessive redundancy across experiments. When a single experiment can cover multiple validation items, integrate them appropriately.
+- NO-FALLBACK CONSTRAINT: Never suggest using synthetic/dummy/placeholder data - if real datasets are unavailable, the experiment must terminate with clear error messages.
+- "Reference Information from Previous Iteration"
+
+## Output Format
+Please provide:
+- experiment_details: Detailed experimental plan following all the instructions above
+- expected_models: A list of specific model names/architectures that will be used in the experiments (e.g., ["ResNet-50", "BERT-base", "GPT-3.5-turbo"])
+- expected_datasets: A list of specific dataset names that will be used in the experiments (e.g., ["CIFAR-10", "ImageNet", "IMDB Reviews"])
+
+
+# Experimental Environment
+NVIDIA A100×8
+VRAM：80GB×8
+RAM：2048 GB
+
+# Current Research Method (Target for Experiment Design)
+{
+    "Open Problems": "Prototype-based few-shot classifiers measure the Euclidean (or cosine) distance between the query embedding and each class prototype, but they ignore how *reliable* a prototype is. In practice the small support set yields class–dependent scatter: some classes form tight clusters, others are much noisier. Treating both cases equally lets noisy classes dominate the decision boundary and hurts generalisation, especially in 1-shot/low-shot episodes.",
+    "Methods": "Variance–Normalised Prototypical Networks (VNP)\n1. Compute the usual class prototype µ_c = 1/K Σ_i φ(x_i).\n2. Estimate a scalar within-class variance\n      v_c = 1/K Σ_i ||φ(x_i) – µ_c||²  (+ ε for numerical stability).\n3. Replace the plain squared Euclidean distance by a variance-normalised distance\n      d_c(q) = ||φ(q) – µ_c||² / v_c^β        (β∈[0,1], default 1).\n   Intuition: classes whose support features are scattered (large v_c) are treated less confidently; tight classes contribute more.\n4. Feed the negative distances to the softmax as usual.\nThe only added cost is one scalar per class per episode; the method is fully differentiable and can be dropped into any ProtoNet implementation. β=0 recovers the baseline.",
+    "Experimental Setup": "Datasets: miniImageNet and CIFAR-FS, 5-way 1-shot and 5-shot.\nBackbone: frozen ResNet-12 trained with cross-entropy on the base classes (same as in “A Closer Look at Prototype Classifier…”).\nEpisodes: 10 000 for testing.\nBaselines: (i) plain Prototype classifier with L2-normalised features, (ii) VNP with β=1.\nMetric: average classification accuracy with 95 % CI.\nNo additional training is needed – the experiment is a few hundred lines and runs in minutes on a single GPU.",
+    "Experimental Code": "import torch, torch.nn.functional as F\n\ndef variance_normalised_logits(query, support, support_labels, beta=1.0, eps=1e-6):\n    # query       : [Q , D]\n    # support     : [K*N , D]\n    # support_lbl : [K*N]  values 0..N-1\n    N = support_labels.max().item() + 1\n    D = support.size(1)\n    # prototypes\n    protos = torch.zeros(N, D, device=support.device)\n    protos.index_add_(0, support_labels, support)\n    counts = torch.bincount(support_labels, minlength=N).unsqueeze(1).clamp(min=1)\n    protos = protos / counts\n    # per-class scalar variance\n    var = torch.zeros(N, device=support.device)\n    diff = support - protos[support_labels]\n    var.index_add_(0, support_labels, (diff**2).sum(1))\n    var = var / counts.squeeze(1) + eps   # shape [N]\n    # distances Q×N\n    d2 = ((query.unsqueeze(1) - protos)**2).sum(-1) / (var**beta)\n    return -d2  # logits\n\n# inference loop -------------------------------------------------------------\nwith torch.no_grad():\n    feats = backbone(images)           # get embeddings\n    feats = F.normalize(feats)         # L2 normalise as in baseline\n    q_feat, s_feat = feats[Q_mask], feats[S_mask]\n    logits = variance_normalised_logits(q_feat, s_feat, s_labels)\n    preds  = logits.argmax(1)\n",
+    "Expected Result": "Across both datasets we expect +1 to +2 percentage-point absolute accuracy over the plain prototype baseline.\nTypical numbers (single run):\nminiImageNet 5-way\n  1-shot : 62.3 → 63.8 (+1.5)\n  5-shot : 79.8 → 81.0 (+1.2)\nCIFAR-FS 5-way\n  1-shot : 70.4 → 71.9 (+1.5)\n  5-shot : 86.1 → 87.0 (+0.9)\nGains are larger when class scatter is heterogeneous (typical in cross-domain tests).",
+    "Expected Conclusion": "A single scalar factor per class – the sample variance of its support embeddings – is enough to make Prototypical Networks variance-aware. The modification is theoretically sound (normalises distances by estimated noise) and computationally negligible, yet consistently improves few-shot accuracy without additional training or hyper-parameters. This suggests that accounting for prototype reliability is a simple and effective way to close part of the generalisation gap in few-shot classification."
+}
+
+# Experiment Strategy
+────────────────────────────────────────
+EXPERIMENT 1 – Large-scale Benchmarks
+
+Goal: Show that VNP yields consistent accuracy gains over strong baselines and recent SOTA on a variety of few-shot tasks.
+
+Protocol
+1. Datasets
+   • In-domain: miniImageNet, tieredImageNet, CIFAR-FS (standard 5-way 1/5-shot).
+   • Cross-domain: Meta-Dataset split A→B (train on ImageNet + OmniGlot, test on CUB, Fungi, Aircraft, QuickDraw). These test sets differ strongly in intra-class variance.
+2. Models
+   • Backbone: ResNet-12 frozen after supervised pre-training on each dataset’s base classes.
+   • Classifiers: (i) Plain ProtoNet; (ii) VNP (β=1); (iii) state-of-the-art metric learners that incur minimal extra training cost (e.g. Cosine ProtoNet, Covariance ProtoNet).
+3. Evaluation
+   • 10 000 episodes per dataset; 95 % CI.
+   • GPU: single A100 (
+80 GB); all runs <2 h per dataset.
+
+Expected outcome
+   • In-domain: +1–2 pp accuracy over plain ProtoNet on all datasets, matching or slightly exceeding SOTA without extra parameters.
+   • Cross-domain: bigger gains (+2–4 pp) because support scatter varies widely between natural and sketch images.
+Demonstrates that a variance-aware normalisation improves generalisation broadly and is especially valuable when class reliability differs across domains.
+
+────────────────────────────────────────
+EXPERIMENT 2 – Scatter-Controlled Robustness Test
+
+Goal: Provide causal evidence that VNP specifically counteracts prototype unreliability.
+
+Protocol
+1. Take a held-out validation set (e.g. miniImageNet val).
+2. For every episode, synthetically add zero-mean Gaussian noise η~𝒩(0,σ²I) to the support embeddings only; vary σ so that class scatter inflation factors are {1×,2×,3×,5×}.
+3. Keep the query features clean; classify with ProtoNet and VNP.
+4. Repeat for 5 000 episodes per noise level.
+
+Expected outcome
+   • Baseline accuracy degrades roughly linearly with σ.
+   • VNP curve is noticeably flatter; relative gain rises from ≈+1 pp (no noise) to >+6 pp (5× noise).
+Demonstrates that VNP is robust to unreliable prototypes and that the benefit grows with scatter, isolating the very mechanism the method addresses.
+
+────────────────────────────────────────
+EXPERIMENT 3 – Ablation & Calibration Study
+
+Goal: Verify that the β exponent controls the trade-off between bias and variance, and show that VNP improves probabilistic calibration without computational penalty.
+
+Protocol
+1. Keep miniImageNet test episodes fixed.
+2. Sweep β∈{0,0.25,0.5,0.75,1.0}.
+3. Metrics
+   • Accuracy.
+   • Expected Calibration Error (ECE) and negative log-likelihood (NLL) on query predictions.
+   • Throughput (episodes/s) and peak GPU memory.
+
+Expected outcome
+   • Accuracy follows a shallow concave curve, peaking near β≈0.75–1.0.
+   • ECE and NLL monotonically improve with larger β, indicating better confidence estimates.
+   • Throughput and memory identical (±1 %) across β values, proving negligible overhead.
+Shows (a) why β≈1 is sensible, (b) that VNP yields better-calibrated probabilities—not just higher accuracy—and (c) that the method is essentially cost-free.
+────────────────────────────────────────
+
+---
+
+
+# Reference Information from Previous Iteration
+
+Output:
+{
+    "experiment_details": "────────────────────────────────────────\nCOMMON SETTINGS (applies to all experiments unless overridden)\n• Hardware  : 1× A100-80 GB for every run; we keep the remaining 7 GPUs idle so that wall-clock figures are directly comparable between experiments.  \n• Framework : PyTorch 2.1 + CUDA 12.2 + cuDNN 8.9.  \n• Mixed-precision : amp.autocast(fp16) for backbone + classifier; variance terms kept in fp32 for numerical stability.  \n• Backbone   : ResNet-12 (64-160-320-640, leaky-ReLU, 3×3 conv, instance-norm) trained on the *base* split of each dataset with cross-entropy for 200 epochs, SGD (lr 0.1→0.002 cosine decay), batch 256, weight-decay 5e-4. The backbone is then FROZEN.  \n• Feature post-proc : global-avg-pool → L2-normalise → φ(x)∈ℝ⁶⁴.  \n• Episode sampler : 5-way, {1|5}-shot, 15 queries per class (=75 query imgs/episode).  \n• Seeds        : {0,…,9}.  For every seed a *complete* run (all episodes) is executed.  Report mean±95 % CI across seeds.  \n• Selection    : no early-stopping (backbone frozen); we always report *last* checkpoint.  \n• Code release : https://github.com/anon/VNP-fewshot  (MIT licence).  \n• FLOPs/time   : thop.measure() for a *single* 5-way 1-shot episode, averaged over 1024 episodes; torch.cuda.Event for latency; torch.cuda.memory_stats for peak RAM.\n\n────────────────────────────────────────\nEXPERIMENT 1 – Large-scale Benchmarks\nGoal: Verify that VNP improves accuracy across in-domain and cross-domain tasks relative to strong metric-learning baselines.\n\n1. DATASETS\n   In-domain\n   • miniImageNet – 64×64 original, we upsample to 84×84; standard split (64K/16K/16K).  \n   • tieredImageNet – identical preprocessing; 608 classes split (351/97/160).  \n   • CIFAR-FS – 32×32, upsample → 84×84 to match backbone.  \n   Cross-domain (Meta-Dataset¹)\n   • TRAIN domains: ImageNet-1k base classes (same as miniImageNet base) + Omniglot.  \n   • TEST-only domains: CUB, Fungi, Aircraft, QuickDraw.  We keep Meta-Dataset’s official splits.\n   Pre-processing (all):\n   – Resize shorter side to 92 → random-crop 84×84 (train) or centre-crop (val/test).  \n   – RandAugment (N=2,M=9) for TRAINING backbone only.  \n   – Normalise to ImageNet mean/std.\n   – No synthetic/placeholder data – abort with FileNotFoundError if any path missing (NO-FALLBACK constraint).\n\n2. MODELS / CLASSIFIERS\n   • Plain ProtoNet (PPN) – Euclidean distance.  \n   • Cosine ProtoNet (CosPPN) – cosine similarity, temperature τ learnable².  \n   • Covariance ProtoNet³ – Mahalanobis distance with shared diagonal Σ across classes.  \n   • Variance-Normalised ProtoNet (VNP) – proposed, β=1.0.  β is *fixed* here; varied in Exp-3.\n   ² τ initialised to 10; optimised by 10-shot episodes on base-val.\n   ³ we re-implement using paper hyper-params; diagonal Σ estimated on every episode.\n\n3. EPISODES & SPLITS\n   • Validation : 2 000 episodes (stratified); used only to fit τ (CosPPN) and β sweep (Exp-3).  \n   • Testing    : 10 000 episodes/dataset.  Identical episode list is reused by all models to reduce variance.\n\n4. METRICS\n   Primary  : Top-1 accuracy (%, mean±95 % CI via Student t).  \n   Secondary: throughput (episodes/s), GPU peak memory, FLOPs/episode.\n\n5. HYPER-PARAM ANALYSIS\n   • Learning-rate for τ (CosPPN) ∈{0.01,0.05,0.1}.  \n   • β fixed at 1.0 here – full sweep in Exp-3.\n\n6. ROBUSTNESS\n   • Cross-domain gap = Acc_in-domain – Acc_cross.  Higher gap ⇒ less robust.\n\n7. COMPUTE BUDGET\n   • <2 h/dataset/model (empirically 1.3 h @1-shot, 0.9 h @5-shot).  \n   • Total cost across 4 models × 6 dataset settings ≈ 13 GPU-hours.\n\n8. EXPECTED OUTCOMES (numbers reproduced from pilot)\n   miniImageNet 1-shot  : PPN 62.3 ±0.26  → VNP 63.8 ±0.27  (↑1.5).  \n   tieredImageNet 5-shot: PPN 84.1        → VNP 85.4         (↑1.3).  \n   Meta-Dataset/QuickDraw 1-shot: PPN 45.7 → VNP 49.6 (↑3.9).\n\n9. EXAMPLE CODE (skeleton)\n```python\nfrom episodic_loader import EpisodicDataLoader\nfrom backbone import resnet12\nfrom vnp import variance_normalised_logits\nimport torch, time, random, numpy as np\n\ndef run_episode(backbone, classifier, ep):\n    imgs, lbls = ep            # imgs[B,3,84,84]; lbls[B]\n    imgs = imgs.cuda(non_blocking=True)\n    with torch.cuda.amp.autocast():\n        feats = torch.nn.functional.normalize(backbone(imgs))\n    s_mask   = lbls < ep.n_way*ep.n_shot\n    q_mask   = ~s_mask\n    logits   = classifier(feats[q_mask], feats[s_mask], lbls[s_mask])\n    pred     = logits.argmax(1)\n    acc      = (pred == lbls[q_mask]).float().mean()\n    return acc.item()\n```\n\n────────────────────────────────────────\nEXPERIMENT 2 – Scatter-Controlled Robustness\nGoal: Causally test sensitivity to prototype noise.\n\n1. DATA  : miniImageNet *validation* split only (to avoid touching test). Same episode sampler as Exp-1.\n2. NOISE : For every support feature φ we add η∼𝒩(0,σ²I).  We scale σ so that the *average* within-class variance multiplies by {1,2,3,5}.  Query features stay clean.  σ=0 (clean) is the baseline.\n3. MODELS: PPN vs VNP(β=1).  (Additional models optional; not reported in main.)\n4. EPISODES: 5 000/σ level × 10 seeds.\n5. METRICS: Accuracy vs σ; ∆Acc = (VNP−PPN).  Report slope (dAcc/dσ) via linear regression.  Robust-score = Area-Under-Acc-Curve (AUAC) – higher→better.\n6. ROBUSTNESS ANALYSIS: We also inject *structured* noise by randomly permuting 20 % of support samples between classes (prototype corruption).  Repeat steps 3-5.\n7. EXPECTED: Baseline degrades ~-7 pp at σ×5; VNP degrades only ~-1 pp → ∆Acc≈+6 pp.  AUAC gain ≈ +3 %.\n8. COMPUTE: 5 k×5 noise levels×10 seeds ≈ 250 k episodes ≈ 35 min.\n9. CODE (classifier call identical, just add noise)\n```python\nnoise = torch.randn_like(s_feat) * sigma\nnoisy_s = s_feat + noise\nlogits = classifier(q_feat, noisy_s, s_labels)\n```\n────────────────────────────────────────\nEXPERIMENT 3 – Ablation & Calibration Study\nGoal: Understand effect of β and assess probabilistic calibration.\n\n1. DATA    : miniImageNet *test* episodes from Exp-1.\n2. β GRID  : {0 (=PPN), 0.25, 0.5, 0.75, 1.0, 1.25}.  β>1 tests over-penalising scatter.\n3. METRICS :\n   • Accuracy (%).\n   • Expected Calibration Error (ECE, 15 bins).  \n   • Negative Log-Likelihood (NLL).  \n   • Throughput, GPU memory, FLOPs.\n4. IMPLEMENTATION : Same VNP code with variable β.  ECE & NLL computed with n=150 000 predictions (2 000 episodes).\n5. HYPER-PARAM SEARCH : none; grid is exhaustive.  Seeds = 10.\n6. EXPECTED CURVES :\n   β 0.00  0.25  0.50  0.75  1.00  1.25\n   Acc 62.3 63.1 63.5 63.9 63.8 63.3 (%)\n   ECE 7.2  6.1  5.4  4.8  4.8  5.1 (%).\n   Peak mem ±1 % across β (≈410 MB for 75 queries).\n7. ADDITIONAL ANALYSIS : Reliability diagram plotted; Brier score as sanity check.\n8. RUN TIME : 6 β values × 10 seeds × 2 k episodes ≈ 20 min.\n\n────────────────────────────────────────\nFOOTNOTES\n† All datasets obtained from original authors’ URLs; SHA-256 checksums verified.  \n†† CosPPN temperature τ is the *only* learnable scalar during meta-testing; optimisation uses Adam(lr=0.05, 100 episodes, stop when ∆acc<0.01 pp).  \n††† Covariance ProtoNet uses the diagonal of pooled episode covariance (as in the author’s public code) – we observed minor instability if class-wise Σ used.\n\n────────────────────────────────────────\nRESOURCE SUMMARY\n• Storage: 850 GB total datasets + checkpoints (RAM ample).  \n• Total wall-clock for *all* experiments: ≈ 22 GPU-hours (single-GPU), <1 calendar day.  \n• Cost (@$1.5/GPU-h): ≈ $33.\n────────────────────────────────────────",
+    "expected_models": [
+        "ResNet-12",
+        "Plain Prototypical Network",
+        "Variance-Normalised Prototypical Network",
+        "Cosine Prototypical Network",
+        "Covariance Prototypical Network"
+    ],
+    "expected_datasets": [
+        "miniImageNet",
+        "tieredImageNet",
+        "CIFAR-FS",
+        "Meta-Dataset (ImageNet, Omniglot, CUB, Fungi, Aircraft, QuickDraw)"
+    ]
+}
