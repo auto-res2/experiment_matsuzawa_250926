@@ -1,0 +1,1851 @@
+
+Input:
+You are a researcher with expertise in engineering in the field of machine learning.
+
+# Instructions
+- The content described in “Repository Content” corresponds to the GitHub repository of the method described in “Method.”
+- Please extract the following two pieces of information from “Repository Content”:
+    - experimental_code：Extract the implementation sections that are directly related to the method described in “Method.”
+    - experimental_info：Extract and output the experimental settings related to the method described in “Method.”
+
+# Method
+PALM comprises a DNN encoder (fθ) for feature extraction, followed by a projector (gϕ) that projects features to a lower-dimensional, normalized hyperspherical embedding (z). The core methodology involves modeling each ID class with a mixture of von Mises-Fisher (vMF) distributions, each defined by multiple prototypes (Pk) per class. Instead of single-prototype modeling, PALM dynamically learns and updates these prototypes. Samples are assigned to prototypes within their respective classes using an online soft cluster assignment method (based on Sinkhorn-Knopp algorithm) to calculate reciprocal neighbor assignment weights, which are then pruned via a top-K shrinkage operation. The learning process is regularized by two main objectives: a Maximum Likelihood Estimation (MLE) loss (LMLE) that encourages sample embeddings to be compact around their associated prototypes, and a novel prototype contrastive loss (Lproto-contra) that enhances intra-class compactness and inter-class discrimination at the prototype level. The overall training objective is LPALM = LMLE + λLproto-contra. Prototypes are updated asynchronously using an Exponential Moving Average (EMA) technique. For OOD detection scoring, PALM employs standard distance metrics such as Mahalanobis score or KNN distance on features from the penultimate layer. The framework also extends to unsupervised OOD detection by adapting the prototype contrastive loss to an unsupervised version and operating without class labels.
+
+# Repository Content
+File Path: eval_cifar.py
+Content:
+import os
+import time
+from util.loaders.args_loader import get_args
+import torch
+import numpy as np
+from util.evaluations.mahalanobis import *
+import shutil
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+args = get_args()
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+torch.cuda.manual_seed_all(args.seed)
+np.random.seed(args.seed)
+
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+eval_maha(args)
+cache_dir = os.path.join("cache", f"{args.backbone}-{args.method}")
+shutil.rmtree(cache_dir)
+
+File Path: feature_extract.py
+Content:
+#! /usr/bin/env python3
+import torch
+import os
+from util.loaders.args_loader import get_args
+from util.loaders.data_loader import get_loader_in, get_loader_out
+from util.loaders.model_loader import get_model
+import numpy as np
+import torch.nn.functional as F
+import time
+from tqdm import tqdm
+
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+args = get_args()
+
+
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+torch.cuda.manual_seed_all(args.seed)
+np.random.seed(args.seed)
+
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+
+trainloaderIn, num_classes = get_loader_in(args, split='train', mode='eval')
+testloaderIn, _ = get_loader_in(args, split='val', mode='eval')
+model = get_model(args, num_classes, load_ckpt=True)
+model.to(device)
+model.eval()
+
+batch_size = args.batch_size
+
+FORCE_RUN = True
+
+dummy_input = torch.zeros((1, 3, 32, 32)).cuda()
+features = model.encoder(dummy_input)
+featdims = features.shape[1]
+
+begin = time.time()
+
+for split, in_loader in [('train', trainloaderIn), ('val', testloaderIn), ]:
+    in_save_dir = os.path.join("cache", f"{args.backbone}-{args.method}", args.in_dataset)
+    if not os.path.exists(in_save_dir):
+        os.makedirs(in_save_dir)
+    cache_name = os.path.join(
+        in_save_dir, f"{split}_{args.backbone}-{args.method}_features.npy")
+    label_cache_name = os.path.join(
+        in_save_dir, f"{split}_{args.backbone}-{args.method}_labels.npy")
+    if FORCE_RUN or not os.path.exists(cache_name):
+        print(f"Processing in-distribution {args.in_dataset} images")
+        t0 = time.time()
+        ########################################
+        features, labels = [], []
+        total = 0
+
+        model.eval()
+
+        for index, (img, label) in enumerate(tqdm(in_loader)):
+
+            img = img.cuda()
+
+            features += list(model.encoder(img).data.cpu().numpy())
+            labels += list(label.data.cpu().numpy())
+
+            total += len(img)
+
+        feat_log, label_log = np.array(features), np.array(labels)
+        ########################################
+        np.save(cache_name, feat_log)
+        np.save(label_cache_name, label_log)
+        print(
+            f"{total} images processed, {time.time()-t0} seconds used\n")
+
+for ood_dataset in args.out_datasets:
+    # print(f"OOD Dataset: {ood_dataset}")
+    out_loader = get_loader_out(args, dataset=ood_dataset, split=('val'), mode='eval')
+
+    out_save_dir = os.path.join(in_save_dir, ood_dataset)
+    if not os.path.exists(out_save_dir):
+        os.makedirs(out_save_dir)
+    cache_name = os.path.join(out_save_dir, f"{args.backbone}-{args.method}_features.npy")
+    label_cache_name = os.path.join(out_save_dir, f"{args.backbone}-{args.method}_labels.npy")
+
+    if FORCE_RUN or not os.path.exists(cache_name):
+        t0 = time.time()
+        print(f"Processing out-of-distribution {ood_dataset} images")
+
+        ########################################
+        features, labels = [], []
+        total = 0
+
+        model.eval()
+
+        for index, (img, label) in enumerate(tqdm(out_loader)):
+
+            img, label = img.cuda(), label.cuda()
+
+            features += list(model.encoder(img).data.cpu().numpy())
+            labels += list(label.data.cpu().numpy())
+
+            total += len(img)
+
+        feat_log, label_log = np.array(features), np.array(labels)
+        ########################################
+        np.save(cache_name, feat_log)
+        np.save(label_cache_name, label_log)
+        print(f"{total} images processed, {time.time()-t0} seconds used\n")
+        t0 = time.time()
+
+print(time.time() - begin)
+
+File Path: main.py
+Content:
+import torch
+import os
+import torch.backends.cudnn as cudnn
+from util.loaders.args_loader import get_args
+from util.loaders.data_loader import get_loader_in
+from util.loaders.model_loader import set_model
+from util.train_utils import get_optimizer
+from trainer import get_trainer
+import numpy as np
+from tqdm import tqdm
+
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+
+def main():
+
+    train_loader, num_classes = get_loader_in(args, split='train')
+
+    model, criterion = set_model(args, num_classes, load_ckpt=False)
+    model.to(device)
+    model.encoder.to(device)
+    criterion.to(device)
+
+
+    # build optimizer
+    optimizer = get_optimizer(args, model, criterion)
+    loss_min = np.Inf
+
+    # tensorboard
+    t = datetime.now().strftime("%d-%B-%Y-%H:%M:%S")
+    logger = SummaryWriter(log_dir=f"runs/{args.backbone}-{args.method}/{t}")
+
+    # get trainer and scaler
+    trainer = get_trainer(args)
+    scaler = torch.cuda.amp.GradScaler()
+                
+    for epoch in tqdm(range(args.epochs)):
+        loss = trainer(args, train_loader, model, criterion, optimizer, epoch, scaler=scaler)
+        
+        if type(loss)==tuple:
+            loss, l_dict = loss
+            logger.add_scalar('Loss/train', loss, epoch)
+            for k in l_dict.keys():
+                logger.add_scalar(f'Loss/{k}', l_dict[k], epoch)
+        else:
+            logger.add_scalar('Loss/train', loss, epoch)
+        logger.add_scalar('Lr/train', optimizer.param_groups[0]['lr'], epoch)
+
+        if loss < loss_min:
+            loss_min = loss
+            torch.save(model.state_dict(), args.save_path)
+
+if __name__ == "__main__":
+
+    FORCE_RUN = True
+    # FORCE_RUN=False
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    cudnn.benchmark = True
+
+    args = get_args()
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    print(args)
+    args.save_epoch = 50
+
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+
+    # check if the model is trained
+    if os.path.exists(args.save_path) and not FORCE_RUN:
+        exit()
+
+    main()
+
+File Path: models/resnet.py
+Content:
+"""ResNet in PyTorch.
+ImageNet-Style ResNet
+[1] Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun
+    Deep Residual Learning for Image Recognition. arXiv:1512.03385
+Adapted from: https://github.com/bearpaw/pytorch-classification
+"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1, is_last=False):
+        super(BasicBlock, self).__init__()
+        self.is_last = is_last
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        preact = out
+        out = F.relu(out)
+        if self.is_last:
+            return out, preact
+        else:
+            return out
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, in_planes, planes, stride=1, is_last=False):
+        super(Bottleneck, self).__init__()
+        self.is_last = is_last
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv3 = nn.Conv2d(planes, self.expansion * planes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(self.expansion * planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out += self.shortcut(x)
+        preact = out
+        out = F.relu(out)
+        if self.is_last:
+            return out, preact
+        else:
+            return out
+
+
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, in_channel=3, zero_init_residual=False):
+        super(ResNet, self).__init__()
+        self.in_planes = 64
+
+        self.conv1 = nn.Conv2d(in_channel, 64, kernel_size=3, stride=1, padding=1,
+                               bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves
+        # like an identity. This improves the model by 0.2~0.3% according to:
+        # https://arxiv.org/abs/1706.02677
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck):
+                    nn.init.constant_(m.bn3.weight, 0)
+                elif isinstance(m, BasicBlock):
+                    nn.init.constant_(m.bn2.weight, 0)
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for i in range(num_blocks):
+            stride = strides[i]
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x, layer=100):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = self.avgpool(out)
+        out = torch.flatten(out, 1)
+        return out
+
+
+def resnet18(**kwargs):
+    return ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+
+
+def resnet34(**kwargs):
+    return ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+
+
+def resnet50(**kwargs):
+    return ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+
+
+def resnet101(**kwargs):
+    return ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
+
+
+model_dict = {
+    'resnet18': [resnet18, 512],
+    'resnet34': [resnet34, 512],
+    'resnet50': [resnet50, 2048],
+    'resnet101': [resnet101, 2048],
+}
+
+
+class LinearBatchNorm(nn.Module):
+    """Implements BatchNorm1d by BatchNorm2d, for SyncBN purpose"""
+    def __init__(self, dim, affine=True):
+        super(LinearBatchNorm, self).__init__()
+        self.dim = dim
+        self.bn = nn.BatchNorm2d(dim, affine=affine)
+
+    def forward(self, x):
+        x = x.view(-1, self.dim, 1, 1)
+        x = self.bn(x)
+        x = x.view(-1, self.dim)
+        return x
+
+
+class SSLResNet(nn.Module):
+    """backbone + projection head"""
+    def __init__(self, name='resnet50', head='mlp', feat_dim=128):
+        super(SSLResNet, self).__init__()
+        model_fun, dim_in = model_dict[name]
+        self.encoder = model_fun()
+        # self.fc = nn.Linear(dim_in, 100)
+        self.feat_dim=feat_dim
+        if head == 'linear':
+            self.head = nn.Linear(dim_in, feat_dim)
+        elif head == 'mlp':
+            self.head = nn.Sequential(
+                nn.Linear(dim_in, dim_in),
+                nn.ReLU(inplace=True),
+                nn.Linear(dim_in, feat_dim)
+            )
+        else:
+            raise NotImplementedError(
+                'head not supported: {}'.format(head))
+
+    def forward(self, x):
+        feat = self.encoder(x)
+        feat = F.normalize(self.head(feat), dim=1)
+        return feat
+    
+    def fine_tune_forward(self, x):
+        encoder = self.encoder
+        x = encoder.conv1(x)
+        x = encoder.bn1(x)
+        x = encoder.relu(x)
+        x = encoder.maxpool(x)
+
+        x = encoder.layer1(x)
+        x = encoder.layer2(x)
+        x = encoder.layer3(x)
+        x = encoder.layer4(x.detach())
+
+        x = encoder.avgpool(x)
+        x = torch.flatten(x, 1)
+        
+        x = F.normalize(self.head(x), dim=1)
+        return x
+        
+    
+    def project(self, feat):
+        return F.normalize(self.head(feat), dim=-1)
+    
+
+class PALMResNet(nn.Module):
+    def __init__(self, name='resnet50', head='mlp', feat_dim=128):
+        super(PALMResNet, self).__init__()
+        model_fun, dim_in = model_dict[name]
+        self.encoder = model_fun()
+        self.feat_dim=feat_dim
+        if head == 'linear':
+            self.head = nn.Linear(dim_in, feat_dim)
+        elif head == 'mlp':
+            self.head = nn.Sequential(
+                nn.Linear(dim_in, dim_in),
+                # nn.BatchNorm1d(dim_in),
+                nn.ReLU(inplace=True),
+                nn.Linear(dim_in, feat_dim)
+            )
+        else:
+            raise NotImplementedError(
+                'head not supported: {}'.format(head))
+            
+        
+    def forward(self, x):
+        feat = self.encoder(x)
+        feat = F.normalize(self.head(feat), dim=-1)
+        # feat = self.head(feat)
+        return feat
+    
+    def fine_tune_forward(self, x):
+        encoder = self.encoder
+        x = encoder.conv1(x)
+        x = encoder.bn1(x)
+        x = encoder.relu(x)
+        x = encoder.maxpool(x)
+
+        x = encoder.layer1(x)
+        x = encoder.layer2(x)
+        x = encoder.layer3(x)
+        x = encoder.layer4(x.detach())
+
+        x = encoder.avgpool(x)
+        x = torch.flatten(x, 1)
+        
+        x = F.normalize(self.head(x), dim=1)
+        return x
+    
+    def project(self, feat):
+        return F.normalize(self.head(feat), dim=-1)
+
+
+class SupCEResNet(nn.Module):
+    """encoder + classifier"""
+    def __init__(self, name='resnet50', num_classes=10):
+        super(SupCEResNet, self).__init__()
+        model_fun, dim_in = model_dict[name]
+        self.encoder = model_fun()
+        self.fc = nn.Linear(dim_in, num_classes)
+
+    def forward(self, x):
+        return self.fc(self.encoder(x))
+
+
+class LinearClassifier(nn.Module):
+    """Linear classifier"""
+    def __init__(self, name='resnet50', num_classes=10):
+        super(LinearClassifier, self).__init__()
+        _, feat_dim = model_dict[name]
+        self.fc = nn.Linear(feat_dim, num_classes)
+
+    def forward(self, features):
+        return self.fc(features)
+
+File Path: trainer.py
+Content:
+import torch
+import numpy as np
+from tqdm import tqdm
+
+from util.train_utils import adjust_learning_rate, AverageMeter
+
+
+def train_palm(args, train_loader, model, criterion, optimizer, epoch, scaler=None):
+    model.train()
+
+    losses = AverageMeter()
+    sub_loss = {}
+
+    for step, (images, labels) in enumerate((train_loader), start=epoch * len(train_loader)):
+        if (len(images)) == 2:
+            twocrop = True
+            images = torch.cat([images[0], images[1]], dim=0)
+        else:
+            twocrop = False
+            
+        if torch.cuda.is_available():
+            images = images.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
+        bsz = labels.shape[0]
+
+        # compute loss
+        optimizer.zero_grad()
+        if scaler:
+            with torch.cuda.amp.autocast():
+                if args.fine_tune:
+                    features = model.fine_tune_forward(images)
+                else:
+                    features = model(images)
+                if twocrop:
+                    f1, f2 = torch.split(features, [bsz, bsz], dim=0)
+                    features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+                else:
+                    features = features.unsqueeze(1)
+                loss, l_dict = criterion(features, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            old_scale = scaler.get_scale()
+            scaler.update()    
+            new_scale = scaler.get_scale()   
+
+        losses.update(loss.item(), bsz)
+        
+        if new_scale >= old_scale:
+            adjust_learning_rate(args, optimizer, train_loader, step)
+            
+        if step%len(train_loader) == 0:
+            for k in l_dict.keys():
+                sub_loss[k] = []
+                
+        for k in l_dict.keys():
+            sub_loss[k].append(l_dict[k])
+            
+    for k in sub_loss.keys():
+        sub_loss[k] = np.mean(sub_loss[k])
+    
+
+    return losses.avg, sub_loss
+
+
+def train_supervised(args, train_loader, model, criterion, optimizer, epoch, warmup_schedular=None, schedular=None, scaler=None, index=None, index_map=None, k=1):
+    model.train()
+
+    losses = AverageMeter()
+    sub_loss = {}
+
+    for step, (images, labels) in enumerate(train_loader, start=epoch * len(train_loader)):
+
+        if torch.cuda.is_available():
+            images = images.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
+
+        # warm-up learning rate
+        # warmup_learning_rate(args, epoch, idx, len(train_loader), optimizer)
+        bsz = labels.shape[0]
+        # compute loss
+        optimizer.zero_grad()
+        if scaler:
+            with torch.cuda.amp.autocast():
+                features = model(images)
+                loss = criterion(features, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()    
+        else:
+            features = model(images)
+            loss = criterion(features, labels)
+            # SGD
+            loss.backward()
+            optimizer.step()
+
+        losses.update(loss.item(), bsz)
+
+        # adjust_learning_rate(args, optimizer, train_loader, step, warmup_schedular=warmup_schedular, schedular=schedular)
+            
+        if step%len(train_loader) == 0:
+            sub_loss['train'] = []
+                
+        for k in sub_loss.keys():
+            sub_loss[k].append(loss.item())
+            
+    for k in sub_loss.keys():
+        sub_loss[k] = np.mean(sub_loss[k])
+    
+
+    return losses.avg, sub_loss
+
+def get_trainer(args):
+    arch = args.method
+    
+    if "palm" in arch:
+            trainer = train_palm
+    else:
+        trainer = train_supervised
+    return trainer 
+File Path: util/__init__.py
+Content:
+
+File Path: util/evaluations/mahalanobis.py
+Content:
+import time
+from util.evaluations import metrics
+import torch
+import numpy as np
+from util.evaluations.write_to_csv import write_csv
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def eval_maha(args):
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    
+    class_num = 10 if args.in_dataset == "CIFAR-10" else 100
+    
+    feat_log = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/train_{args.backbone}-{args.method}_features.npy", allow_pickle=True)
+    label_log = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/train_{args.backbone}-{args.method}_labels.npy", allow_pickle=True)
+    feat_log = feat_log.astype(np.float32)
+
+    feat_log_val = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/val_{args.backbone}-{args.method}_features.npy", allow_pickle=True)
+    label_log_val = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/val_{args.backbone}-{args.method}_labels.npy", allow_pickle=True)
+    feat_log_val = feat_log_val.astype(np.float32)
+
+    ood_feat_log_all = {}
+    for ood_dataset in args.out_datasets:
+        ood_feat_log = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/{ood_dataset}/{args.backbone}-{args.method}_features.npy", allow_pickle=True)
+        ood_label_log = np.load(f"cache/{args.backbone}-{args.method}/{args.in_dataset}/{ood_dataset}/{args.backbone}-{args.method}_labels.npy", allow_pickle=True)
+        ood_feat_log = ood_feat_log.astype(np.float32)
+        ood_feat_log_all[ood_dataset] = ood_feat_log
+
+    normalizer = lambda x: x / (np.linalg.norm(x, ord=2, axis=-1, keepdims=True) + 1e-10)
+
+    prepos_feat = lambda x: np.ascontiguousarray(normalizer(x))# Last Layer only
+
+    ftrain = prepos_feat(feat_log)
+    ftest = prepos_feat(feat_log_val)
+    food_all = {}
+    for ood_dataset in args.out_datasets:
+        food_all[ood_dataset] = prepos_feat(ood_feat_log_all[ood_dataset])
+
+
+# #################### SSD+ score OOD detection #################
+    begin = time.time()
+    mean_feat = ftrain.mean(0)
+    std_feat = ftrain.std(0)
+    prepos_feat_ssd = lambda x: (x - mean_feat) / (std_feat + 1e-10)
+    ftrain_ssd = prepos_feat_ssd(ftrain)
+    ftest_ssd = prepos_feat_ssd(ftest)
+    food_ssd_all = {}
+    for ood_dataset in args.out_datasets:
+        food_ssd_all[ood_dataset] = prepos_feat_ssd(food_all[ood_dataset])
+    
+    cov = lambda x: np.cov(x.T, bias=True)
+    
+    def maha_score(X):
+        z = X-mean_feat
+        inv_sigma = np.linalg.pinv(cov(ftrain_ssd))
+        return -np.sum(z * (inv_sigma.dot(z.T)).T, axis=-1)
+
+    dtest = maha_score(ftest_ssd)
+    all_results = []
+    for name, food in food_ssd_all.items():
+        print(f"Evaluating {name}")
+        dood = maha_score(food)
+        results = metrics.cal_metric(dtest, dood)
+        all_results.append(results)
+    
+    metrics.print_all_results(all_results, args.out_datasets, 'SSD+')
+    args.score = "mahalanobis"
+    write_csv(args, all_results)
+    print(time.time() - begin)
+    
+    
+File Path: util/evaluations/metrics.py
+Content:
+from __future__ import print_function
+import argparse
+import torch
+
+from scipy import misc
+import numpy as np
+import sklearn.metrics as sk
+from util.loaders.model_loader import get_model
+
+
+def cal_metric(known, novel, method=None):
+    tp, fp, fpr_at_tpr95 = get_curve(known, novel, method)
+    results = dict()
+    mtypes = ['FPR', 'AUROC', 'DTERR', 'AUIN', 'AUOUT']
+
+    results = dict()
+
+    # FPR
+    mtype = 'FPR'
+    # fpr95=np.sum(novel < np.percentile(known, 95)) / len(novel)
+    fpr95=np.sum(novel > np.percentile(known, 5)) / len(novel)
+    # results[mtype] = fpr_at_tpr95
+    results[mtype] = fpr95
+
+    # AUROC
+    # mtype = 'AUROC'
+    tpr = np.concatenate([[1.], tp/tp[0], [0.]])
+    fpr = np.concatenate([[1.], fp/fp[0], [0.]])
+    # results[mtype] = -np.trapz(1.-fpr, tpr)
+    mtype = 'AUROC'
+    # labels = [0] * len(known) + [1] * len(novel)
+    labels = [1] * len(known) + [0] * len(novel)
+    data = np.concatenate((known, novel))
+    auroc = sk.roc_auc_score(labels, data)
+    results[mtype] = auroc
+    
+
+    # DTERR
+    mtype = 'DTERR'
+    results[mtype] = ((tp[0] - tp + fp) / (tp[0] + fp[0])).min()
+
+    # AUIN
+    mtype = 'AUIN'
+    denom = tp+fp
+    denom[denom == 0.] = -1.
+    pin_ind = np.concatenate([[True], denom > 0., [True]])
+    pin = np.concatenate([[.5], tp/denom, [0.]])
+    results[mtype] = -np.trapz(pin[pin_ind], tpr[pin_ind])
+
+    # AUOUT
+    mtype = 'AUOUT'
+    denom = tp[0]-tp+fp[0]-fp
+    denom[denom == 0.] = -1.
+    pout_ind = np.concatenate([[True], denom > 0., [True]])
+    pout = np.concatenate([[0.], (fp[0]-fp)/denom, [.5]])
+    results[mtype] = np.trapz(pout[pout_ind], 1.-fpr[pout_ind])
+
+    return results
+
+
+def get_curve(known, novel, method=None):
+    tp, fp = dict(), dict()
+    fpr_at_tpr95 = dict()
+
+    known.sort()
+    novel.sort()
+
+    end = np.max([np.max(known), np.max(novel)])
+    start = np.min([np.min(known), np.min(novel)])
+
+    all = np.concatenate((known, novel))
+    all.sort()
+
+    num_k = known.shape[0]
+    num_n = novel.shape[0]
+
+    if method == 'row':
+        threshold = -0.5
+    else:
+        threshold = known[round(0.05 * num_k)]
+
+    tp = -np.ones([num_k+num_n+1], dtype=int)
+    fp = -np.ones([num_k+num_n+1], dtype=int)
+    tp[0], fp[0] = num_k, num_n
+    k, n = 0, 0
+    for l in range(num_k+num_n):
+        if k == num_k:
+            tp[l+1:] = tp[l]
+            fp[l+1:] = np.arange(fp[l]-1, -1, -1)
+            break
+        elif n == num_n:
+            tp[l+1:] = np.arange(tp[l]-1, -1, -1)
+            fp[l+1:] = fp[l]
+            break
+        else:
+            if novel[n] < known[k]:
+                n += 1
+                tp[l+1] = tp[l]
+                fp[l+1] = fp[l] - 1
+            else:
+                k += 1
+                tp[l+1] = tp[l] - 1
+                fp[l+1] = fp[l]
+
+    j = num_k+num_n-1
+    for l in range(num_k+num_n-1):
+        if all[j] == all[j-1]:
+            tp[j] = tp[j+1]
+            fp[j] = fp[j+1]
+        j -= 1
+
+    fpr_at_tpr95 = np.sum(novel > threshold) / float(num_n)
+
+    return tp, fp, fpr_at_tpr95
+
+
+def print_results(results, in_dataset, out_dataset, name, method):
+    mtypes = ['FPR', 'DTERR', 'AUROC', 'AUIN', 'AUOUT']
+
+    print('in_distribution: ' + in_dataset)
+    print('out_distribution: ' + out_dataset)
+    print('Model Name: ' + name)
+    print('')
+
+    print(' OOD detection method: ' + method)
+    for mtype in mtypes:
+        print(' {mtype:6s}'.format(mtype=mtype), end='')
+    print('\n{val:6.2f}'.format(val=100.*results['FPR']), end='')
+    print(' {val:6.2f}'.format(val=100.*results['DTERR']), end='')
+    print(' {val:6.2f}'.format(val=100.*results['AUROC']), end='')
+    print(' {val:6.2f}'.format(val=100.*results['AUIN']), end='')
+    print(' {val:6.2f}\n'.format(val=100.*results['AUOUT']), end='')
+    print('')
+
+def print_all_results_tab(results, datasets, method):
+    [print('{:6.2f}\t{:6.2f}\t{:6.2f}\t'.format(100.*result['FPR'], 100. *
+           result['AUROC'], 100.*result['AUIN']), end='') for result in results]
+
+
+def print_all_results(results, datasets, method):
+    # ['FPR', 'DTERR', 'AUROC', 'AUIN', 'AUOUT']
+    mtypes = ['FPR', 'AUROC', 'AUIN']
+    avg_results = compute_average_results(results)
+    print(' OOD detection method: ' + method)
+    print('             ', end='')
+    for mtype in mtypes:
+        print(' {mtype:6s}'.format(mtype=mtype), end='')
+    for result, dataset in zip(results, datasets):
+        print('\n{dataset:12s}'.format(dataset=dataset), end='')
+        print(' {val:6.2f}'.format(val=100.*result['FPR']), end='')
+        print(' {val:6.2f}'.format(val=100.*result['AUROC']), end='')
+
+    print('\nAVG         ', end='')
+    print(' {val:6.2f}'.format(val=100.*avg_results['FPR']), end='')
+    print(' {val:6.2f}'.format(val=100.*avg_results['AUROC']), end='')
+    print()
+
+
+def compute_average_results(all_results):
+    mtypes = ['FPR', 'DTERR', 'AUROC', 'AUIN', 'AUOUT']
+    avg_results = dict()
+
+    for mtype in mtypes:
+        avg_results[mtype] = 0.0
+
+    for results in all_results:
+        for mtype in mtypes:
+            avg_results[mtype] += results[mtype]
+
+    for mtype in mtypes:
+        avg_results[mtype] /= float(len(all_results))
+
+    return avg_results
+
+def compute_in(base_dir, in_dataset, method, name):
+
+    known_nat = np.load(
+        f'{base_dir}/{method}/{in_dataset}/{name}_in_scores.npy')
+    known_nat_sorted = np.sort(known_nat)
+    num_k = known_nat.shape[0]
+
+    if method == 'rowl':
+        threshold = -0.5
+    else:
+        threshold = known_nat_sorted[round(0.05 * num_k)]
+
+    known_nat_label = np.load(
+        f'{base_dir}/{method}/{in_dataset}/{name}_in_labels.npy')
+
+    nat_in_cond = (known_nat > threshold).astype(np.float32)
+    nat_correct = (known_nat_label[:, 0] ==
+                   known_nat_label[:, 1]).astype(np.float32)
+    nat_conf = np.mean(known_nat_label[:, 2])
+    known_nat_cond_acc = np.sum(
+        nat_correct * nat_in_cond) / max(np.sum(nat_in_cond), 1)
+    known_nat_acc = np.mean(nat_correct)
+    known_nat_cond_fnr = np.sum(
+        nat_correct * (1.0 - nat_in_cond)) / max(np.sum(nat_correct), 1)
+    known_nat_fnr = np.mean((1.0 - nat_in_cond))
+    known_nat_eteacc = np.mean(nat_correct * nat_in_cond)
+
+    print('FNR: {fnr:6.2f}, Acc: {acc:6.2f}, End-to-end Acc: {eteacc:6.2f}'.format(
+        fnr=known_nat_fnr*100, acc=known_nat_acc*100, eteacc=known_nat_eteacc*100))
+
+    return
+
+
+def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
+    """Use high precision for cumsum and check that final value matches sum
+    Parameters
+    ----------
+    arr : array-like
+        To be cumulatively summed as flat
+    rtol : float
+        Relative tolerance, see ``np.allclose``
+    atol : float
+        Absolute tolerance, see ``np.allclose``
+    """
+    out = np.cumsum(arr, dtype=np.float64)
+    expected = np.sum(arr, dtype=np.float64)
+    if not np.allclose(out[-1], expected, rtol=rtol, atol=atol):
+        raise RuntimeError('cumsum was found to be unstable: '
+                           'its last element does not correspond to sum')
+    return out
+
+
+
+def fpr_and_fdr_at_recall(y_true, y_score, recall_level=0.95, pos_label=None):
+    classes = np.unique(y_true)
+    if (pos_label is None and
+            not (np.array_equal(classes, [0, 1]) or
+                 np.array_equal(classes, [-1, 1]) or
+                 np.array_equal(classes, [0]) or
+                 np.array_equal(classes, [-1]) or
+                 np.array_equal(classes, [1]))):
+        raise ValueError("Data is not binary and pos_label is not specified")
+    elif pos_label is None:
+        pos_label = 1.
+
+    # make y_true a boolean vector
+    y_true = (y_true == pos_label)
+
+    # sort scores and corresponding truth values
+    desc_score_indices = np.argsort(y_score, kind="mergesort")[::-1]
+    y_score = y_score[desc_score_indices]
+    y_true = y_true[desc_score_indices]
+
+    # y_score typically has many tied values. Here we extract
+    # the indices associated with the distinct values. We also
+    # concatenate a value for the end of the curve.
+    distinct_value_indices = np.where(np.diff(y_score))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
+
+    # accumulate the true positives with decreasing threshold
+    tps = stable_cumsum(y_true)[threshold_idxs]
+    fps = 1 + threshold_idxs - tps      # add one because of zero-based indexing
+
+    thresholds = y_score[threshold_idxs]
+
+    recall = tps / tps[-1]
+
+    last_ind = tps.searchsorted(tps[-1])
+    sl = slice(last_ind, None, -1)      # [last_ind::-1]
+    recall, fps, tps, thresholds = np.r_[recall[sl], 1], np.r_[
+        fps[sl], 0], np.r_[tps[sl], 0], thresholds[sl]
+
+    cutoff = np.argmin(np.abs(recall - recall_level))
+
+    return fps[cutoff] / (np.sum(np.logical_not(y_true)))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Pytorch Detecting Out-of-distribution examples in neural networks')
+
+    parser.add_argument('--in-dataset', default="CIFAR-10",
+                        type=str, help='in-distribution dataset')
+    parser.add_argument('--name', default="resnet18", type=str,
+                        help='neural network name and training set')
+    parser.add_argument('--method', default='energy',
+                        type=str, help='odin mahalanobis')
+    parser.add_argument('--base-dir', default='output/ood_scores',
+                        type=str, help='result directory')
+    parser.add_argument('--epsilon', default=8, type=int, help='epsilon')
+
+    parser.set_defaults(argument=True)
+
+    args = parser.parse_args()
+
+    np.random.seed(1)
+
+    out_datasets = ['SVHN', 'LSUN', 'LSUN_resize', 'iSUN', 'dtd', 'places365']
+
+File Path: util/evaluations/write_to_csv.py
+Content:
+from csv import DictWriter
+import os
+from util.evaluations.metrics import compute_average_results
+
+def write_csv(args, results):
+    # return
+    avg = compute_average_results(results)
+    
+    backbone = args.backbone
+    save_dir = "evaluation_results"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        
+    save_path = os.path.join(save_dir, f"{args.in_dataset}-{backbone}-{args.score}.csv")
+    ood = args.out_datasets
+    
+    
+    field_names = ['Methods']
+    for o in ood:
+        field_names.append(o+'-FPR')
+        field_names.append(o+'-AUROC')
+    field_names.append('AVG-FPR')
+    field_names.append('AVG-AUROC')
+    
+    
+    dict = {}
+    dict["Methods"] = args.method
+    for result, dataset in zip(results, ood):
+        dict[f"{dataset}-FPR"] = 100.*result['FPR']
+        dict[f"{dataset}-AUROC"] = 100.*result['AUROC']
+        
+    dict[f"AVG-FPR"] = 100.*avg['FPR']
+    dict[f"AVG-AUROC"] = 100.*avg['AUROC']
+
+
+    if not os.path.exists(save_path):
+        with open(save_path, 'w') as f:
+            writer = DictWriter(f, fieldnames=field_names)
+            writer.writeheader()
+
+    # Open CSV file in append mode
+    # Create a file object for this file
+    with open(save_path, 'a') as f_object:
+        dictwriter_object = DictWriter(f_object, fieldnames=field_names)
+        dictwriter_object.writerow(dict)
+        f_object.close()
+File Path: util/loaders/args_loader.py
+Content:
+import argparse
+import math
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def get_args():
+    parser = argparse.ArgumentParser(
+        description='Pytorch Detecting Out-of-distribution examples in neural networks')
+
+    parser.add_argument('--in-dataset', default="CIFAR-10",
+                        type=str, help='CIFAR-10 imagenet')
+    parser.add_argument('--out-datasets', default=['inat', 'sun50', 'places50', 'dtd', ], nargs="*", type=str,
+                        help="['SVHN', 'LSUN', 'iSUN', 'dtd', 'places365']  ['inat', 'sun50', 'places50', 'dtd', ]")
+    parser.add_argument('--backbone', default='resnet34',
+                        type=str, help='model backbone')
+    parser.add_argument('--method', default='supcon',
+                        type=str, help='method used for training')
+    parser.add_argument('--seed', default=1, type=int, help='seed')
+    parser.add_argument('--gpu', default='0', type=str, help='gpu device')
+
+    # Optimization options
+    parser.add_argument('--epochs', default=100, type=int,
+                        help='number of total epochs to run')
+    parser.add_argument('-b', '--batch-size', default=128,
+                        type=int, help='mini-batch size')
+    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                        help='initial learning rate')
+    parser.add_argument('--weight-decay', '--wd', default=0.0001, type=float,
+                        help='weight decay (default: 0.0001)')
+    parser.add_argument('--print_every', default=50, type=int,
+                        help='print model status')
+    parser.add_argument('--fine_tune', action='store_true', default=False,
+                        help='fine_tuning')
+    parser.add_argument('--temp', default=0.1, type=float,
+                        help='temperature')
+    parser.add_argument('--cosine', action='store_true', default=True,
+                        help='using cosine annealing')
+    parser.add_argument('--warm', action='store_true',
+                        help='warm-up for large batch training')
+    parser.add_argument('--lr_decay_epochs', type=str, default='700,800,900',
+                        help='where to decay lr, can be a list')
+    parser.add_argument('--lr_decay_rate', type=float, default=0.1,
+                        help='decay rate for learning rate')
+
+    # backbone options
+    parser.add_argument('--layers', default=100, type=int,
+                        help='total number of layers (default: 100)')
+    parser.add_argument('--depth', default=40, type=int,
+                        help='depth of resnet')
+    parser.add_argument('--width', default=4, type=int, help='width of resnet')
+    parser.add_argument('--growth', default=12, type=int,
+                        help='number of new channels per layer (default: 12)')
+    parser.add_argument('--droprate', default=0.0, type=float,
+                        help='dropout probability (default: 0.0)')
+    parser.add_argument('--save-path', default="CIFAR-10-ResNet18.pt",
+                        type=str, help="the path to save the trained model")
+    parser.add_argument('--reduce', default=0.5, type=float,
+                        help='compression rate in transition stage (default: 0.5)')
+    parser.add_argument('--score', default="mahalanobis", type=str,
+                        help='the scoring function for evaluation')
+    parser.add_argument('--threshold', default=1.0,
+                        type=float, help='sparsity level')
+    parser.set_defaults(argument=True)
+    
+    # prototypes arguments
+    parser.add_argument('--k', default=5, type=int)
+    parser.add_argument('--momentum', default=0.9, type=float, help="SGD momentum")
+    parser.add_argument('--proto_m', default=0.999, type=float, help="prototypes update momentum")
+    parser.add_argument('--cache-size', default=6, type=int)
+    parser.add_argument('--nviews', default=2, type=int)
+    
+    # loss config
+    parser.add_argument('--lambda_pcon', default=1., type=float)
+    parser.add_argument('--epsilon', default=0.05, type=float)
+    
+    args = parser.parse_args()
+    
+    if "noaug" in args.method:
+        args.nviews = 1
+
+    if args.batch_size > 256:
+        args.warm = True
+    if args.warm:
+        args.warmup_from = 0.01
+        args.warm_epochs = 10
+        if args.cosine:
+            eta_min = args.lr * (args.lr_decay_rate ** 3)
+            args.warmup_to = eta_min + (args.lr - eta_min) * (
+                1 + math.cos(math.pi * args.warm_epochs / args.epochs)) / 2
+        else:
+            args.warmup_to = args.lr
+
+    return args
+
+
+File Path: util/loaders/data_loader.py
+Content:
+import os
+import torch
+import torchvision
+from torchvision import transforms
+from PIL import ImageOps, ImageFilter
+import numpy as np
+import torchvision.transforms as transforms
+from torchvision.transforms import InterpolationMode
+
+
+imagesize = 32
+
+
+def get_transform_test(in_set):
+    return transforms.Compose([
+        transforms.Resize((imagesize, imagesize)),
+        transforms.CenterCrop(imagesize),
+        transforms.ToTensor(),
+        get_normalizer(in_set)
+    ])
+
+
+transform_train = transforms.Compose([
+    transforms.RandomResizedCrop(size=imagesize, scale=(0.2, 1.)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465),
+                         (0.2023, 0.1994, 0.2010)),
+])
+
+def get_transform_eval(in_set):
+    return transforms.Compose([
+        transforms.Resize((imagesize, imagesize)), 
+        transforms.CenterCrop(imagesize),
+        transforms.ToTensor(),
+        get_normalizer(in_set)
+    ])
+
+
+def get_normalizer(dataset):
+    if dataset == 'CIFAR-10':
+        mean = (0.4914, 0.4822, 0.4465)
+        std = (0.2023, 0.1994, 0.2010)
+    elif dataset == 'CIFAR-100':
+        mean = (0.5071, 0.4867, 0.4408)
+        std = (0.2675, 0.2565, 0.2761)
+    else:
+        raise ValueError('dataset not supported: {}'.format(dataset))
+    normalize = transforms.Normalize(mean=mean, std=std)
+    return normalize
+
+
+def simclr_transform_train(dataset):
+    return transforms.Compose([
+        transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomApply([
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        ], p=0.8),
+        transforms.RandomGrayscale(p=0.2),
+        transforms.ToTensor(),
+        get_normalizer(dataset)
+    ])
+
+
+class TwoCropTransform:
+    """Create two crops of the same image"""
+
+    def __init__(self, transform):
+        self.transform = transform
+
+    def __call__(self, x):
+        return [self.transform(x), self.transform(x)]
+
+
+class GaussianBlur(object):
+    def __init__(self, p):
+        self.p = p
+
+    def __call__(self, img):
+        if np.random.rand() < self.p:
+            sigma = np.random.rand() * 1.9 + 0.1
+            return img.filter(ImageFilter.GaussianBlur(sigma))
+        else:
+            return img
+
+
+class Solarization(object):
+    def __init__(self, p):
+        self.p = p
+
+    def __call__(self, img):
+        if np.random.rand() < self.p:
+            return ImageOps.solarize(img)
+        else:
+            return img
+
+
+class Vicreg_transform_train(object):
+    def __init__(self):
+        self.transform = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(
+                    32, interpolation=InterpolationMode.BICUBIC
+                ),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomApply(
+                    [
+                        transforms.ColorJitter(
+                            brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
+                        )
+                    ],
+                    p=0.8,
+                ),
+                transforms.RandomGrayscale(p=0.2),
+                GaussianBlur(p=1.0),
+                Solarization(p=0.0),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]
+                ),
+            ]
+        )
+        self.transform_prime = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(
+                    32, interpolation=InterpolationMode.BICUBIC
+                ),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomApply(
+                    [
+                        transforms.ColorJitter(
+                            brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
+                        )
+                    ],
+                    p=0.8,
+                ),
+                transforms.RandomGrayscale(p=0.2),
+                GaussianBlur(p=0.1),
+                Solarization(p=0.2),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010]
+                ),
+            ]
+        )
+
+    def __call__(self, sample):
+        x1 = self.transform(sample)
+        x2 = self.transform_prime(sample)
+        return [x1, x2]
+
+
+def get_transform_train(dataset, arch):
+    if 'palm' in arch:
+        transform = TwoCropTransform(simclr_transform_train(dataset))
+    else:
+        transform = transform_train
+    return transform
+
+
+kwargs = {'num_workers': 2, 'pin_memory': True}
+num_classes_dict = {'CIFAR-100': 100, 'CIFAR-10': 10, 'imagenet': 1000}
+
+val_shuffle = False
+
+
+def get_loader_in(args, split=('train', 'val', 'csid'), mode='train'):
+    base_dir = './data'
+    
+    kwargs = {'num_workers': 2, 'pin_memory': True}
+    num_classes_dict = {'CIFAR-100': 100, 'CIFAR-10': 10, 'imagenet': 1000}
+    if mode == 'train':
+        transform_train = get_transform_train(args.in_dataset, args.method)
+        transform_test = get_transform_test(args.in_dataset)
+    elif mode == "eval":
+        transform_train = get_transform_eval(args.in_dataset)
+        transform_test = get_transform_eval(args.in_dataset)
+
+    if args.in_dataset == "CIFAR-10":
+        # Data loading code
+        if 'train' in split:
+            trainset = torchvision.datasets.CIFAR10(
+                root=os.path.join(base_dir, 'cifarpy'), train=True, download=True, transform=transform_train)
+            train_loader = torch.utils.data.DataLoader(
+                trainset, batch_size=args.batch_size, shuffle=True, **kwargs)
+        if 'val' in split:
+            valset = torchvision.datasets.CIFAR10(
+                root=os.path.join(base_dir, 'cifarpy'), train=False, download=True, transform=transform_test)
+            val_loader = torch.utils.data.DataLoader(
+                valset, batch_size=args.batch_size, shuffle=val_shuffle, **kwargs)
+    elif args.in_dataset == "CIFAR-100":
+        # Data loading code
+        if 'train' in split:
+            trainset = torchvision.datasets.CIFAR100(
+                root=os.path.join(base_dir, 'cifarpy'), train=True, download=True, transform=transform_train)
+            train_loader = torch.utils.data.DataLoader(
+                trainset, batch_size=args.batch_size, shuffle=True, **kwargs)
+        if 'val' in split:
+            valset = torchvision.datasets.CIFAR100(
+                root=os.path.join(base_dir, 'cifarpy'), train=False, download=True, transform=transform_test)
+            val_loader = torch.utils.data.DataLoader(
+                valset, batch_size=args.batch_size, shuffle=val_shuffle, **kwargs)
+
+    if 'train' in split:
+        return train_loader, num_classes_dict[args.in_dataset]
+    else:
+        return val_loader, num_classes_dict[args.in_dataset]
+
+
+def get_loader_out(args, dataset, split=('train', 'val'), mode='eval'):
+    base_dir = './data'
+        
+    kwargs = {'num_workers': 4, 'pin_memory': True}
+    if mode == 'train':
+        transform_test = get_transform_test(args.in_dataset)
+    elif mode == "eval":
+        transform_test = get_transform_eval(args.in_dataset)
+    val_ood_loader = None
+
+    if 'val' in split:
+        val_dataset = dataset
+        batch_size = args.batch_size
+        if val_dataset == 'SVHN':
+            val_ood_loader = torch.utils.data.DataLoader(torchvision.datasets.SVHN(os.path.join(base_dir, 'svhn'), split='test', transform=transform_test, download=False),
+                                                         batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+        elif val_dataset == 'dtd':
+            val_ood_loader = torch.utils.data.DataLoader(torchvision.datasets.ImageFolder(root=os.path.join(base_dir, 'dtd/images'), transform=transform_test),
+                                                         batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+        elif val_dataset == 'places365':
+            testsetout = torchvision.datasets.ImageFolder(root=os.path.join(base_dir, "Places365/test_subset/test_256/"), transform=transform_test)
+            if len(testsetout) > 10000: 
+                testsetout = torch.utils.data.Subset(testsetout, np.random.choice(len(testsetout), 10000, replace=False))
+            val_ood_loader = torch.utils.data.DataLoader(testsetout, batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+        elif val_dataset == 'CIFAR-100':
+            val_ood_loader = torch.utils.data.DataLoader(torchvision.datasets.CIFAR100(root=os.path.join(base_dir, 'cifarpy'), train=False, download=True, transform=transform_test),
+                                                         batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+        elif val_dataset == 'CIFAR-10':
+            val_ood_loader = torch.utils.data.DataLoader(torchvision.datasets.CIFAR10(root=os.path.join(base_dir, 'cifarpy'), train=False, download=True, transform=transform_test),
+                                                         batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+        else:
+            val_ood_loader = torch.utils.data.DataLoader(torchvision.datasets.ImageFolder(root=os.path.join(base_dir, val_dataset),transform=transform_test), 
+                                                         batch_size=batch_size, shuffle=val_shuffle, **kwargs)
+    return val_ood_loader
+File Path: util/loaders/model_loader.py
+Content:
+import torch
+import torch.nn as nn
+from util.loss_functions import *
+from torch.optim.lr_scheduler import MultiStepLR
+from models.resnet import  SupCEResNet, PALMResNet
+
+def get_model(args, num_classes, load_ckpt=True):
+    method = args.method
+    if 'palm' in method:
+        model = PALMResNet(name=args.backbone)
+    else:
+        model = SupCEResNet(name=args.backbone, num_classes=num_classes)
+        
+    if load_ckpt:  
+        checkpoint = torch.load(args.save_path, map_location="cuda:0")
+        model.load_state_dict(checkpoint)
+        print(f"ckpt loaded from {args.save_path}")
+
+    model.eval()
+    
+    # get the number of model parameters
+    print(f'{args.backbone}-{args.method}: Number of model parameters: {sum([p.data.nelement() for p in model.parameters()])}')
+    return model
+
+
+def get_criterion(args, num_classes, model):
+    arch = args.method
+    if 'palm' in arch:
+        cri = PALM(args, temp=args.temp, num_classes=num_classes, proto_m=args.proto_m, n_protos=num_classes*args.cache_size,  k=args.k, lambda_pcon=args.lambda_pcon)
+    else:
+        cri = nn.CrossEntropyLoss()
+
+    return cri
+    
+def get_encoder_dim(model):
+    dummy_input = torch.zeros((1, 3, 32, 32))
+    features = model.encoder(dummy_input)
+    featdims = features.shape[1]
+    return featdims
+    
+def set_model(args, num_classes, load_ckpt=True, load_epoch=None):
+    model = get_model(args, num_classes, load_ckpt)
+    criterion = get_criterion(args, num_classes, model)
+    return model, criterion
+
+def set_schedular(args, optimizer):
+    scheduler = MultiStepLR(optimizer, milestones=[50,75,90], gamma=0.1)
+    return scheduler
+File Path: util/loaders/select_svhn_data.py
+Content:
+import scipy.io as sio
+import os
+import numpy as np
+
+root = 'datasets/small_OOD_dataset/svhn'
+filename = 'test_32x32.mat'
+
+loaded_mat = sio.loadmat(os.path.join(root, filename))
+
+data = loaded_mat['X']
+targets = loaded_mat['y']
+
+data = np.transpose(data, (3, 0, 1, 2))
+
+selected_data = []
+selected_targets = []
+count = np.zeros(11)
+
+for i, y in enumerate(targets):
+    if count[y[0]] < 1000:
+        selected_data.append(data[i])
+        selected_targets.append(y)
+        count[y[0]] += 1
+
+selected_data = np.array(selected_data)
+selected_targets = np.array(selected_targets)
+
+selected_data = np.transpose(selected_data, (1, 2, 3, 0))
+
+save_mat = {'X': selected_data, 'y': selected_targets}
+
+save_filename = 'selected_test_32x32.mat'
+sio.savemat(os.path.join(root, save_filename), save_mat)
+File Path: util/loaders/svhn_loader.py
+Content:
+import torch.utils.data as data
+from PIL import Image
+import os
+import os.path
+import numpy as np
+
+
+class SVHN(data.Dataset):
+    url = ""
+    filename = ""
+    file_md5 = ""
+
+    split_list = {
+        'train': ["http://ufldl.stanford.edu/housenumbers/train_32x32.mat",
+                  "train_32x32.mat", "e26dedcc434d2e4c54c9b2d4a06d8373"],
+        'test': ["http://ufldl.stanford.edu/housenumbers/test_32x32.mat",
+                 "selected_test_32x32.mat", "eb5a983be6a315427106f1b164d9cef3"],
+        'extra': ["http://ufldl.stanford.edu/housenumbers/extra_32x32.mat",
+                  "extra_32x32.mat", "a93ce644f1a588dc4d68dda5feec44a7"],
+        'train_and_extra': [
+                ["http://ufldl.stanford.edu/housenumbers/train_32x32.mat",
+                 "train_32x32.mat", "e26dedcc434d2e4c54c9b2d4a06d8373"],
+                ["http://ufldl.stanford.edu/housenumbers/extra_32x32.mat",
+                 "extra_32x32.mat", "a93ce644f1a588dc4d68dda5feec44a7"]]}
+
+    def __init__(self, root, split='train',
+                 transform=None, target_transform=None, download=False):
+        self.root = root
+        self.transform = transform
+        self.target_transform = target_transform
+        self.split = split  # training set or test set or extra set
+
+        if self.split not in self.split_list:
+            raise ValueError('Wrong split entered! Please use split="train" '
+                             'or split="extra" or split="test" '
+                             'or split="train_and_extra" ')
+
+        if self.split == "train_and_extra":
+            self.url = self.split_list[split][0][0]
+            self.filename = self.split_list[split][0][1]
+            self.file_md5 = self.split_list[split][0][2]
+        else:
+            self.url = self.split_list[split][0]
+            self.filename = self.split_list[split][1]
+            self.file_md5 = self.split_list[split][2]
+
+        # import here rather than at top of file because this is
+        # an optional dependency for torchvision
+        import scipy.io as sio
+
+        # reading(loading) mat file as array
+        # loaded_mat = sio.loadmat(os.path.join(root, self.filename))
+
+        loaded_mat = sio.loadmat(os.path.join("util/loaders", self.filename))
+        if self.split == "test":
+            self.data = loaded_mat['X']
+            self.targets = loaded_mat['y']
+            # Note label 10 == 0 so modulo operator required
+            self.targets = (self.targets % 10).squeeze()    # convert to zero-based indexing
+            self.data = np.transpose(self.data, (3, 2, 0, 1))
+        else:
+            self.data = loaded_mat['X']
+            self.targets = loaded_mat['y']
+
+            if self.split == "train_and_extra":
+                extra_filename = self.split_list[split][1][1]
+                loaded_mat = sio.loadmat(os.path.join(root, extra_filename))
+                self.data = np.concatenate([self.data,
+                                                  loaded_mat['X']], axis=3)
+                self.targets = np.vstack((self.targets,
+                                               loaded_mat['y']))
+            # Note label 10 == 0 so modulo operator required
+            self.targets = (self.targets % 10).squeeze()    # convert to zero-based indexing
+            self.data = np.transpose(self.data, (3, 2, 0, 1))
+
+    def __getitem__(self, index):
+        if self.split == "test":
+            img, target = self.data[index], self.targets[index]
+        else:
+            img, target = self.data[index], self.targets[index]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(np.transpose(img, (1, 2, 0)))
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target.astype(np.long)
+
+    def __len__(self):
+        if self.split == "test":
+            return len(self.data)
+        else:
+            return len(self.data)
+
+
+File Path: util/loss_functions.py
+Content:
+import torch.nn as nn
+import torch
+import torch.nn.functional as F
+   
+
+class PALM(nn.Module):
+    def __init__(self, args, num_classes=10, n_protos=1000, proto_m=0.99, temp=0.1, lambda_pcon=1, k=0,feat_dim=128, epsilon=0.05):
+        super(PALM, self).__init__()
+        self.num_classes = num_classes
+        self.temp = temp  # temperature scaling
+        self.nviews = args.nviews
+        self.cache_size = args.cache_size
+        
+        self.lambda_pcon = lambda_pcon
+        
+        self.feat_dim = feat_dim
+        
+        self.epsilon = epsilon
+        self.sinkhorn_iterations = 3
+        self.k = min(k, self.cache_size)
+        
+        self.n_protos = n_protos
+        self.proto_m = proto_m
+        self.register_buffer("protos", torch.rand(self.n_protos,feat_dim))
+        self.protos = F.normalize(self.protos, dim=-1)
+        
+    def sinkhorn(self, features):
+        out = torch.matmul(features, self.protos.detach().T)
+            
+        Q = torch.exp(out.detach() / self.epsilon).t()# Q is K-by-B for consistency with notations from our paper
+        B = Q.shape[1]  # number of samples to assign
+        K = Q.shape[0] # how many prototypes
+
+        # make the matrix sums to 1
+        sum_Q = torch.sum(Q)
+        if torch.isinf(sum_Q):
+            self.protos = F.normalize(self.protos, dim=1, p=2)
+            out = torch.matmul(features, self.protos.detach().T)
+            Q = torch.exp(out.detach() / self.epsilon).t()# Q is K-by-B for consistency with notations from our paper
+            sum_Q = torch.sum(Q)
+        Q /= sum_Q
+
+        for _ in range(self.sinkhorn_iterations):
+            # normalize each row: total weight per prototype must be 1/K
+            Q = F.normalize(Q, dim=1, p=1)
+            Q /= K
+
+            # normalize each column: total weight per sample must be 1/B
+            Q = F.normalize(Q, dim=0, p=1)
+            Q /= B
+
+        Q *= B
+        return Q.t()
+        
+    def mle_loss(self, features, targets):
+        # update prototypes by EMA
+        features = torch.cat(torch.unbind(features, dim=1), dim=0)
+        
+        anchor_labels = targets.contiguous().repeat(self.nviews).view(-1, 1)
+        contrast_labels = torch.arange(self.num_classes).repeat(self.cache_size).view(-1,1).cuda()
+        mask = torch.eq(anchor_labels, contrast_labels.T).float().cuda()
+                
+        Q = self.sinkhorn(features)
+        # topk
+        if self.k > 0:
+            update_mask = mask*Q
+            _, topk_idx = torch.topk(update_mask, self.k, dim=1)
+            topk_mask = torch.scatter(
+                torch.zeros_like(update_mask),
+                1,
+                topk_idx,
+                1
+            ).cuda()
+            update_mask = F.normalize(F.normalize(topk_mask*update_mask, dim=1, p=1),dim=0, p=1)
+        # original
+        else:
+            update_mask = F.normalize(F.normalize(mask * Q, dim=1, p=1),dim=0, p=1)
+        update_features = torch.matmul(update_mask.T, features)
+        
+        protos = self.protos
+        protos = self.proto_m * protos + (1-self.proto_m) * update_features
+
+        self.protos = F.normalize(protos, dim=1, p=2)
+        
+        Q = self.sinkhorn(features)
+        
+        proto_dis = torch.matmul(features, self.protos.detach().T)
+        anchor_dot_contrast = torch.div(proto_dis, self.temp)
+        logits = anchor_dot_contrast
+       
+        if self.k > 0:
+            loss_mask = mask*Q
+            _, topk_idx = torch.topk(update_mask, self.k, dim=1)
+            topk_mask = torch.scatter(
+                torch.zeros_like(update_mask),
+                1,
+                topk_idx,
+                1
+            ).cuda()
+            loss_mask = F.normalize(topk_mask*loss_mask, dim=1, p=1)
+            masked_logits = loss_mask * logits 
+        else:  
+            masked_logits = F.normalize(Q*mask, dim=1, p=1) * logits
+    
+        pos=torch.sum(masked_logits, dim=1)
+        neg=torch.log(torch.sum(torch.exp(logits), dim=1, keepdim=True))
+        log_prob=pos-neg
+        
+        loss = -torch.mean(log_prob)
+        return loss   
+    
+    def proto_contra(self):
+        
+        protos = F.normalize(self.protos, dim=1)
+        batch_size = self.num_classes
+        
+        proto_labels = torch.arange(self.num_classes).repeat(self.cache_size).view(-1,1).cuda()
+        mask = torch.eq(proto_labels, proto_labels.T).float().cuda()    
+
+        contrast_count = self.cache_size
+        contrast_feature = protos
+
+        anchor_feature = contrast_feature
+        anchor_count = contrast_count
+
+        # compute logits
+        anchor_dot_contrast = torch.div(
+            torch.matmul(anchor_feature, contrast_feature.T),
+            0.5)
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
+
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).to('cuda'),
+            0
+        )
+        mask = mask*logits_mask
+        
+        pos = torch.sum(F.normalize(mask, dim=1, p=1)*logits, dim=1)
+        neg=torch.log(torch.sum(logits_mask * torch.exp(logits), dim=1))
+        log_prob=pos-neg
+
+        # loss
+        loss = - torch.mean(log_prob)
+        return loss
+    
+           
+    def forward(self, features, targets):
+        loss = 0
+        loss_dict = {}
+
+        g_con = self.mle_loss(features, targets)
+        loss += g_con
+        loss_dict['mle'] = g_con.cpu().item()
+                    
+        if self.lambda_pcon > 0:            
+            g_dis = self.lambda_pcon * self.proto_contra()
+            loss += g_dis
+            loss_dict['proto_contra'] = g_dis.cpu().item()
+                                
+        self.protos = self.protos.detach()
+                
+        return loss, loss_dict
+    
+
+File Path: util/train_utils.py
+Content:
+from __future__ import print_function
+
+import math
+import torch
+import torch.optim as optim
+
+class TwoCropTransform:
+    """Create two crops of the same image"""
+    def __init__(self, transform):
+        self.transform = transform
+
+    def __call__(self, x):
+        return [self.transform(x), self.transform(x)]
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+
+def get_optimizer(args, model, criterion):
+    optimizer = optim.SGD(model.parameters(),
+                        lr=args.lr,
+                        momentum=args.momentum,
+                        nesterov=True,
+                        weight_decay=args.weight_decay)
+    return optimizer
+
+
+def adjust_learning_rate(args, optimizer, loader, step):
+    max_steps = args.epochs * len(loader)
+    warmup_steps = 10 * len(loader)
+    base_lr = args.lr
+    if step < warmup_steps:
+        lr = base_lr * step / warmup_steps
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
+    else:
+        step -= warmup_steps
+        max_steps -= warmup_steps
+        q = 0.5 * (1 + math.cos(math.pi * step / max_steps))
+        end_lr = base_lr * 0.001
+        lr = base_lr * q + end_lr * (1 - q)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
+
+Output:
+{
+    "experimental_code": "import torch.nn as nn\nimport torch\nimport torch.nn.functional as F\n\n\nclass PALMResNet(nn.Module):\n    def __init__(self, name='resnet50', head='mlp', feat_dim=128):\n        super(PALMResNet, self).__init__()\n        model_fun, dim_in = model_dict[name]\n        self.encoder = model_fun()\n        self.feat_dim=feat_dim\n        if head == 'linear':\n            self.head = nn.Linear(dim_in, feat_dim)\n        elif head == 'mlp':\n            self.head = nn.Sequential(\n                nn.Linear(dim_in, dim_in),\n                # nn.BatchNorm1d(dim_in),\n                nn.ReLU(inplace=True),\n                nn.Linear(dim_in, feat_dim)\n            )\n        else:\n            raise NotImplementedError(\n                'head not supported: {}'.format(head))\n            \n        \n    def forward(self, x):\n        feat = self.encoder(x)\n        feat = F.normalize(self.head(feat), dim=-1)\n        # feat = self.head(feat)\n        return feat\n    \n    def project(self, feat):\n        return F.normalize(self.head(feat), dim=-1)\n\n\n\nclass PALM(nn.Module):\n    def __init__(self, args, num_classes=10, n_protos=1000, proto_m=0.99, temp=0.1, lambda_pcon=1, k=0,feat_dim=128, epsilon=0.05):\n        super(PALM, self).__init__()\n        self.num_classes = num_classes\n        self.temp = temp  # temperature scaling\n        self.nviews = args.nviews\n        self.cache_size = args.cache_size\n        \n        self.lambda_pcon = lambda_pcon\n        \n        self.feat_dim = feat_dim\n        \n        self.epsilon = epsilon\n        self.sinkhorn_iterations = 3\n        self.k = min(k, self.cache_size)\n        \n        self.n_protos = n_protos\n        self.proto_m = proto_m\n        self.register_buffer(\"protos\", torch.rand(self.n_protos,feat_dim))\n        self.protos = F.normalize(self.protos, dim=-1)\n        \n    def sinkhorn(self, features):\n        out = torch.matmul(features, self.protos.detach().T)\n            \n        Q = torch.exp(out.detach() / self.epsilon).t()# Q is K-by-B for consistency with notations from our paper\n        B = Q.shape[1]  # number of samples to assign\n        K = Q.shape[0] # how many prototypes\n\n        # make the matrix sums to 1\n        sum_Q = torch.sum(Q)\n        if torch.isinf(sum_Q):\n            self.protos = F.normalize(self.protos, dim=1, p=2)\n            out = torch.matmul(features, self.protos.detach().T)\n            Q = torch.exp(out.detach() / self.epsilon).t()# Q is K-by-B for consistency with notations from our paper\n            sum_Q = torch.sum(Q)\n        Q /= sum_Q\n\n        for _ in range(self.sinkhorn_iterations):\n            # normalize each row: total weight per prototype must be 1/K\n            Q = F.normalize(Q, dim=1, p=1)\n            Q /= K\n\n            # normalize each column: total weight per sample must be 1/B\n            Q = F.normalize(Q, dim=0, p=1)\n            Q /= B\n\n        Q *= B\n        return Q.t()\n        \n    def mle_loss(self, features, targets):\n        # update prototypes by EMA\n        features = torch.cat(torch.unbind(features, dim=1), dim=0)\n        \n        anchor_labels = targets.contiguous().repeat(self.nviews).view(-1, 1)\n        contrast_labels = torch.arange(self.num_classes).repeat(self.cache_size).view(-1,1).cuda()\n        mask = torch.eq(anchor_labels, contrast_labels.T).float().cuda()\n                \n        Q = self.sinkhorn(features)\n        # topk\n        if self.k > 0:\n            update_mask = mask*Q\n            _, topk_idx = torch.topk(update_mask, self.k, dim=1)\n            topk_mask = torch.scatter(\n                torch.zeros_like(update_mask),\n                1,\n                topk_idx,\n                1\n            ).cuda()\n            update_mask = F.normalize(F.normalize(topk_mask*update_mask, dim=1, p=1),dim=0, p=1)\n        # original\n        else:\n            update_mask = F.normalize(F.normalize(mask * Q, dim=1, p=1),dim=0, p=1)\n        update_features = torch.matmul(update_mask.T, features)\n        \n        protos = self.protos\n        protos = self.proto_m * protos + (1-self.proto_m) * update_features\n\n        self.protos = F.normalize(protos, dim=1, p=2)\n        \n        Q = self.sinkhorn(features)\n        \n        proto_dis = torch.matmul(features, self.protos.detach().T)\n        anchor_dot_contrast = torch.div(proto_dis, self.temp)\n        logits = anchor_dot_contrast\n       \n        if self.k > 0:\n            loss_mask = mask*Q\n            _, topk_idx = torch.topk(update_mask, self.k, dim=1)\n            topk_mask = torch.scatter(\n                torch.zeros_like(update_mask),\n                1,\n                topk_idx,\n                1\n            ).cuda()\n            loss_mask = F.normalize(topk_mask*loss_mask, dim=1, p=1)\n            masked_logits = loss_mask * logits \n        else:  \n            masked_logits = F.normalize(Q*mask, dim=1, p=1) * logits\n    \n        pos=torch.sum(masked_logits, dim=1)\n        neg=torch.log(torch.sum(torch.exp(logits), dim=1, keepdim=True))\n        log_prob=pos-neg\n        \n        loss = -torch.mean(log_prob)\n        return loss   \n    \n    def proto_contra(self):\n        \n        protos = F.normalize(self.protos, dim=1)\n        batch_size = self.num_classes\n        \n        proto_labels = torch.arange(self.num_classes).repeat(self.cache_size).view(-1,1).cuda()\n        mask = torch.eq(proto_labels, proto_labels.T).float().cuda()    \n\n        contrast_count = self.cache_size\n        contrast_feature = protos\n\n        anchor_feature = contrast_feature\n        anchor_count = contrast_count\n\n        # compute logits\n        anchor_dot_contrast = torch.div(\n            torch.matmul(anchor_feature, contrast_feature.T),\n            0.5)\n        # for numerical stability\n        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)\n        logits = anchor_dot_contrast - logits_max.detach()\n\n        # mask-out self-contrast cases\n        logits_mask = torch.scatter(\n            torch.ones_like(mask),\n            1,\n            torch.arange(batch_size * anchor_count).view(-1, 1).to('cuda'),\n            0\n        )\n        mask = mask*logits_mask\n        \n        pos = torch.sum(F.normalize(mask, dim=1, p=1)*logits, dim=1)\n        neg=torch.log(torch.sum(logits_mask * torch.exp(logits), dim=1))\n        log_prob=pos-neg\n\n        # loss\n        loss = - torch.mean(log_prob)\n        return loss\n    \n           \n    def forward(self, features, targets):\n        loss = 0\n        loss_dict = {}\n\n        g_con = self.mle_loss(features, targets)\n        loss += g_con\n        loss_dict['mle'] = g_con.cpu().item()\n                    \n        if self.lambda_pcon > 0:            \n            g_dis = self.lambda_pcon * self.proto_contra()\n            loss += g_dis\n            loss_dict['proto_contra'] = g_dis.cpu().item()\n                                \n        self.protos = self.protos.detach()\n                \n        return loss, loss_dict\n\n\ndef train_palm(args, train_loader, model, criterion, optimizer, epoch, scaler=None):\n    model.train()\n\n    losses = AverageMeter()\n    sub_loss = {}\n\n    for step, (images, labels) in enumerate((train_loader), start=epoch * len(train_loader)):\n        if (len(images)) == 2:\n            twocrop = True\n            images = torch.cat([images[0], images[1]], dim=0)\n        else:\n            twocrop = False\n            \n        if torch.cuda.is_available():\n            images = images.cuda(non_blocking=True)\n            labels = labels.cuda(non_blocking=True)\n        bsz = labels.shape[0]\n\n        optimizer.zero_grad()\n        if scaler:\n            with torch.cuda.amp.autocast():\n                if args.fine_tune:\n                    features = model.fine_tune_forward(images)\n                else:\n                    features = model(images)\n                if twocrop:\n                    f1, f2 = torch.split(features, [bsz, bsz], dim=0)\n                    features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)\n                else:\n                    features = features.unsqueeze(1)\n                loss, l_dict = criterion(features, labels)\n            scaler.scale(loss).backward()\n            scaler.step(optimizer)\n            old_scale = scaler.get_scale()\n            scaler.update()    \n            new_scale = scaler.get_scale()   \n\n        losses.update(loss.item(), bsz)\n        \n        if new_scale >= old_scale:\n            adjust_learning_rate(args, optimizer, train_loader, step)\n            \n        if step%len(train_loader) == 0:\n            for k in l_dict.keys():\n                sub_loss[k] = []\n                \n        for k in l_dict.keys():\n            sub_loss[k].append(l_dict[k])\n            \n    for k in sub_loss.keys():\n        sub_loss[k] = np.mean(sub_loss[k])\n    \n    return losses.avg, sub_loss\n\n\n\nfor split, in_loader in [('train', trainloaderIn), ('val', testloaderIn), ]:\n    in_save_dir = os.path.join(\"cache\", f\"{args.backbone}-{args.method}\", args.in_dataset)\n    if not os.path.exists(in_save_dir):\n        os.makedirs(in_save_dir)\n    cache_name = os.path.join(\n        in_save_dir, f\"{split}_{args.backbone}-{args.method}_features.npy\")\n    label_cache_name = os.path.join(\n        in_save_dir, f\"{split}_{args.backbone}-{args.method}_labels.npy\")\n    if FORCE_RUN or not os.path.exists(cache_name):\n        print(f\"Processing in-distribution {args.in_dataset} images\")\n        t0 = time.time()\n        features, labels = [], []\n        total = 0\n\n        model.eval()\n\n        for index, (img, label) in enumerate(tqdm(in_loader)):\n\n            img = img.cuda()\n\n            features += list(model.encoder(img).data.cpu().numpy())\n            labels += list(label.data.cpu().numpy())\n\n            total += len(img)\n\n        feat_log, label_log = np.array(features), np.array(labels)\n        np.save(cache_name, feat_log)\n        np.save(label_cache_name, label_log)\n        print(\n            f\"{total} images processed, {time.time()-t0} seconds used\\n\")\n\nfor ood_dataset in args.out_datasets:\n    out_loader = get_loader_out(args, dataset=ood_dataset, split=('val'), mode='eval')\n\n    out_save_dir = os.path.join(in_save_dir, ood_dataset)\n    if not os.path.exists(out_save_dir):\n        os.makedirs(out_save_dir)\n    cache_name = os.path.join(out_save_dir, f\"{args.backbone}-{args.method}_features.npy\")\n    label_cache_name = os.path.join(out_save_dir, f\"{args.backbone}-{args.method}_labels.npy\")\n\n    if FORCE_RUN or not os.path.exists(cache_name):\n        t0 = time.time()\n        print(f\"Processing out-of-distribution {ood_dataset} images\")\n\n        features, labels = [], []\n        total = 0\n\n        model.eval()\n\n        for index, (img, label) in enumerate(tqdm(out_loader)):\n\n            img, label = img.cuda(), label.cuda()\n\n            features += list(model.encoder(img).data.cpu().numpy())\n            labels += list(label.data.cpu().numpy())\n\n            total += len(img)\n\n        feat_log, label_log = np.array(features), np.array(labels)\n        np.save(cache_name, feat_log)\n        np.save(label_cache_name, label_log)\n        print(f\"{total} images processed, {time.time()-t0} seconds used\\n\")\n\n\ndef eval_maha(args):\n    torch.manual_seed(args.seed)\n    torch.cuda.manual_seed(args.seed)\n    torch.cuda.manual_seed_all(args.seed)\n    np.random.seed(args.seed)\n    \n    class_num = 10 if args.in_dataset == \"CIFAR-10\" else 100\n    \n    feat_log = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/train_{args.backbone}-{args.method}_features.npy\", allow_pickle=True)\n    label_log = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/train_{args.backbone}-{args.method}_labels.npy\", allow_pickle=True)\n    feat_log = feat_log.astype(np.float32)\n\n    feat_log_val = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/val_{args.backbone}-{args.method}_features.npy\", allow_pickle=True)\n    label_log_val = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/val_{args.backbone}-{args.method}_labels.npy\", allow_pickle=True)\n    feat_log_val = feat_log_val.astype(np.float32)\n\n    ood_feat_log_all = {}\n    for ood_dataset in args.out_datasets:\n        ood_feat_log = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/{ood_dataset}/{args.backbone}-{args.method}_features.npy\", allow_pickle=True)\n        ood_label_log = np.load(f\"cache/{args.backbone}-{args.method}/{args.in_dataset}/{ood_dataset}/{args.backbone}-{args.method}_labels.npy\", allow_pickle=True)\n        ood_feat_log = ood_feat_log.astype(np.float32)\n        ood_feat_log_all[ood_dataset] = ood_feat_log\n\n    normalizer = lambda x: x / (np.linalg.norm(x, ord=2, axis=-1, keepdims=True) + 1e-10)\n\n    prepos_feat = lambda x: np.ascontiguousarray(normalizer(x))\n\n    ftrain = prepos_feat(feat_log)\n    ftest = prepos_feat(feat_log_val)\n    food_all = {}\n    for ood_dataset in args.out_datasets:\n        food_all[ood_dataset] = prepos_feat(ood_feat_log_all[ood_dataset])\n\n    begin = time.time()\n    mean_feat = ftrain.mean(0)\n    std_feat = ftrain.std(0)\n    prepos_feat_ssd = lambda x: (x - mean_feat) / (std_feat + 1e-10)\n    ftrain_ssd = prepos_feat_ssd(ftrain)\n    ftest_ssd = prepos_feat_ssd(ftest)\n    food_ssd_all = {}\n    for ood_dataset in args.out_datasets:\n        food_ssd_all[ood_dataset] = prepos_feat_ssd(food_all[ood_dataset])\n    \n    cov = lambda x: np.cov(x.T, bias=True)\n    \n    def maha_score(X):\n        z = X-mean_feat\n        inv_sigma = np.linalg.pinv(cov(ftrain_ssd))\n        return -np.sum(z * (inv_sigma.dot(z.T)).T, axis=-1)\n\n    dtest = maha_score(ftest_ssd)\n    all_results = []\n    for name, food in food_ssd_all.items():\n        print(f\"Evaluating {name}\")\n        dood = maha_score(food)\n        results = metrics.cal_metric(dtest, dood)\n        all_results.append(results)\n    \n    metrics.print_all_results(all_results, args.out_datasets, 'SSD+')\n    args.score = \"mahalanobis\"\n    write_csv(args, all_results)\n    print(time.time() - begin)",
+    "experimental_info": "Method: PALM\nModel Architecture: `PALMResNet` consisting of a ResNet backbone (default 'resnet34' from `args.backbone`), followed by an MLP projector head (default `head='mlp'`) which projects features to a lower dimension (`feat_dim` default 128) and normalizes them.\nCore Loss Components: Maximum Likelihood Estimation (MLE) loss (`LMLE`) and Prototype Contrastive Loss (`Lproto-contra`).\nOverall Training Objective: `LPALM = LMLE + λLproto-contra`, where `λ` is `args.lambda_pcon` (default 1.0).\nPrototype Modeling: Each in-distribution class is modeled with a mixture of von Mises-Fisher (vMF) distributions, with multiple prototypes per class. The number of prototypes per class is determined by `args.cache_size` (default 6). The total number of prototypes is `num_classes * args.cache_size`.\nPrototype Update: Prototypes are updated asynchronously using an Exponential Moving Average (EMA) technique with momentum `args.proto_m` (default 0.999).\nSample-to-Prototype Assignment: An online soft cluster assignment is performed using the Sinkhorn-Knopp algorithm, parameterized by `args.epsilon` (default 0.05) and 3 `sinkhorn_iterations`.\nAssignment Pruning: Reciprocal neighbor assignment weights are pruned via a top-K shrinkage operation, where `K` is `args.k` (default 5).\nTemperature Scaling: The MLE loss uses a temperature `args.temp` (default 0.1) for logit scaling.\nData Augmentation: During training, `TwoCropTransform` (generating `args.nviews`=2 crops by default) is applied using SimCLR-style transformations.\nOptimizer: SGD with learning rate `args.lr` (default 0.1), momentum `args.momentum` (default 0.9), and weight decay `args.weight_decay` (default 0.0001). The learning rate schedule is cosine annealing, with a warm-up period if `args.batch_size` > 256.\nTraining Epochs: `args.epochs` (default 100).\nBatch Size: `args.batch_size` (default 128).\nIn-distribution Dataset: `args.in_dataset` (default 'CIFAR-10').\nOut-of-distribution Datasets: `args.out_datasets` (default `['inat', 'sun50', 'places50', 'dtd']`).\nOOD Detection Scoring: Mahalanobis distance (`args.score` is \"mahalanobis\") is employed. Features for scoring are extracted from the `model.encoder` (penultimate layer), which are then L2 normalized and standardized using SSD+ style standardization (mean and standard deviation computed from training features)."
+}
