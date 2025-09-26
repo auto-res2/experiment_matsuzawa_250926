@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed FeCAM method is based on an optimal Bayesian classifier that models class feature distributions using a multivariate normal distribution (N(µy, Σy)) and employs the anisotropic Mahalanobis distance (DM) for classification. Key techniques include: 1) **Covariance Matrix Approximation**: Supports using either a common covariance matrix incrementally updated across tasks (Σ1:t) or a separate covariance matrix for each class (Σy). 2) **Normalization of Covariance Matrices**: Applies correlation normalization to make per-class covariance matrices comparable by setting their diagonal elements to 1. 3) **Covariance Shrinkage**: Implements a shrinkage method to ensure covariance matrices are invertible (full-rank), especially when the number of samples is less than feature dimensions. 4) **Tukey’s Ladder of Powers Transformation**: Transforms feature vectors to reduce skewness and make their distributions more Gaussian-like before computing covariance matrices. The paper argues that this Bayesian approach learns better non-linear decision boundaries compared to sampling features from Gaussian distributions and training linear classifiers, as optimal boundaries are non-linear when class covariances are unequal.
+
+# GitHub URLs List
+['https://github.com/dipamgoswami/FeCAM']
+Output:
+{
+    "index": 0
+}
