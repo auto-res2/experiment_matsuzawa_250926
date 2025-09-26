@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The core methodology involves training a lightweight adapter to rectify diverse target domain feature styles to align with the source domain, allowing the use of a pre-trained source domain segmentation model. To achieve this, the method employs: 1. **Local Domain Perturbation:** Gaussian noise is injected into the feature channel statistics (mean µo and variance σo) of individual source domain images. Perturbation factors α and β control this process, generating perturbed feature maps (Fp). This is applied with a probability Plocal. 2. **Global Domain Perturbation:** To enhance diversity and stability, global style statistics (µdatum) are computed through momentum updating across the entire source dataset. These global statistics replace individual image statistics in the perturbation process, allowing for more aggressive noise application without training collapse. This is applied with a probability Pglobal. 3. **Domain Rectification Module:** A compact adapter takes the perturbed features and predicts two rectification vectors ({αrect, βrect}) to adjust the feature channel statistics back to the original source domain style, producing rectified features (Frect). 4. **Cyclic Domain Alignment:** To supervise the rectification process, a cyclic alignment loss (Lcyc) is introduced. After Frect is obtained, it is re-perturbed with the same noise and then reverse-rectified by the adapter, with Lcyc enforcing alignment between the original source feature statistics and the cyclically rectified feature statistics. An additional alignment loss (Lalign) directly constrains the statistics of Frect to match those of the original feature. The overall model is optimized using a combined loss (L = LBCE + Lcyc + Lalign), where LBCE is the standard Binary Cross-Entropy loss. During inference, the trained adapter directly rectifies target domain features before they are fed into the source domain segmentation model.
+
+# GitHub URLs List
+['https://github.com/Matt-Su/DR-Adapter']
+Output:
+{
+    "index": 0
+}
