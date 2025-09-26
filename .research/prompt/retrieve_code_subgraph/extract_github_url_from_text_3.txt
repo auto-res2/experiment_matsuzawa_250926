@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+HYPO shapes hyperspherical embedding space to promote domain-invariant representations. The learning objective consists of two main parts: a variation loss (Lvar) to reduce intra-class variation by encouraging sample embeddings to be close to their class prototypes, and a separation loss (Lsep) to maximize inter-class separation by pushing different class prototypes apart. Normalized feature embeddings are used, and class prototype vectors are updated using an Exponential Moving Average (EMA). Classification during testing is performed by identifying the closest class prototype. The loss function is geometrically interpreted as performing maximum likelihood estimation under the von Mises-Fisher (vMF) distribution.
+
+# GitHub URLs List
+['https://github.com/deeplearning-wisc/hypo']
+Output:
+{
+    "index": 0
+}
