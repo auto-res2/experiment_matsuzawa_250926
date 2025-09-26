@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The model extends the 'prototype-then-edit' framework. It defines a generative process where an observed sentence `xn` is produced by retrieving a prototype `tn`, generating a continuous edit representation `zn`, and then editing `tn` using `zn` to produce `xn`. A key innovation is modeling the prototype distribution `p(t)` as a latent variable `θ`, which is sampled from a symmetric Dirichlet prior `pα(θ)` with `α < 1` to encourage sparsity. The edit vector `p(z)` is modeled using a uniform von-Mises Fisher (vMF) distribution. The editor `pγ(x|t,z)` is implemented as an attentional LSTM sequence-to-sequence model, where `z` influences the decoder's initial hidden state and input. Learning and inference are performed via amortized variational inference to optimize the Evidence Lower Bound (ELBO). The variational distribution `qλ(θ)` is a Dirichlet distribution, whose parameter `λ` is updated using Stochastic Variational Inference (SVI). The prototype retriever `qφt|x(t|x)` is a categorical distribution parameterized by a neural network, which uses pretrained BERT embeddings for input sentences and avoids selecting the input itself as a prototype. The inverse neural editor `qφz|t,x(z|t,x)` is a vMF distribution that encodes edit operations (insertions, deletions, substitutions, equals) obtained by a diffing algorithm aligning `t` and `x`, feeding concatenated word and edit operation embeddings into an LSTM. Optimization uses REINFORCE for discrete prototype sampling and annealing/free-bits techniques to mitigate posterior collapse.
+
+# GitHub URLs List
+['https://github.com/jxhe/sparse-text-prototype']
+Output:
+{
+    "index": 0
+}
