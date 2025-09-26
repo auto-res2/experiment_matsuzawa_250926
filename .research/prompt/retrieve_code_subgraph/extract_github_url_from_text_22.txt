@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+LDReg is a generic regularization technique applied to representations learned by an SSL encoder. Its formulation is based on deriving a novel asymptotic Fisher-Rao (AFR) metric, dAFR, which measures the distance between local distance distributions at an asymptotically small radius for each data point. This metric is derived from the Fisher information of smooth growth functions, specifically canonical forms Hw|θ, whose CDFs are parameterized by LID (θ). The theory indicates that the geometric mean is the natural centroid for aggregating LIDs using the AFR metric. The LDReg objective function is designed to maximize the logarithm of the geometric mean of sample-wise LIDs (LL1) or its squared version (LL2), thereby maximizing the AFR distance between learned local distributions and a 1D uniform distribution (which has LID=1). LID values are estimated using the Method of Moments, involving the calculation of pairwise Euclidean distances between encoder representations within a batch to determine nearest neighbors.
+
+# GitHub URLs List
+['https://github.com/HanxunH/LDReg', 'https://github.com/HanxunH/LDReg', 'https://github.com/facebookresearch/vissl', 'https://github.com/facebookresearch/detectron2', 'https://github.com/facebookresearch/moco', 'https://github.com/facebookresearch/vicreg']
+Output:
+{
+    "index": 0
+}
