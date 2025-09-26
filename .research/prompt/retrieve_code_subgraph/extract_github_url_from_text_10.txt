@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+R&R is comprised of two core components: 1. **Recombination:** This involves a prototype-based generative model (`prewrite` or `precomb`) trained to reconstruct training pairs by combining fragments from other training examples. The model is extended to `n-prototype models` (e.g., 2-prototype), which act as meta-learners. A specialized architecture called "Recombination Networks" (a multi-sequence-to-sequence model) is used, featuring LSTM encoders and a gated copy mechanism that explicitly reuses tokens from multiple prototypes and previously generated outputs via attention. 2. **Resampling:** A rejection sampling scheme is applied to the generated augmented data, upweighting examples where `min t p(dt) <ϵ` (where `p(dt)` is the marginal probability of token `dt`). This effectively functions as a rare tag constraint, ensuring that augmented data is rich in informative, rare phenomena. The procedure also deﬁnes `Neighborhoods` and `Prototype Priors` (e.g., long-short and long-long recombination based on string edit distance and Jaccard similarity) to guide the selection of compatible prototypes. An ordinary neural sequence model (LSTM with attention) is then trained on the original dataset augmented with these recombined and resampled examples.
+
+# GitHub URLs List
+['https://github.com/ekinakyurek/compgen']
+Output:
+{
+    "index": 1
+}
