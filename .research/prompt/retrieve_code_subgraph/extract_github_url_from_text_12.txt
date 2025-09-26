@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed method, LaplacianShot, formulates few-shot learning as a transductive inference problem that minimizes a Laplacian-regularized objective function: E(Y) = N(Y) + λ/2 L(Y). N(Y) is a unary term based on the distance between query features and class prototypes (mc), derived from support examples. L(Y) is a pairwise Laplacian regularizer that utilizes an affinity matrix W (k-nearest neighbor affinities) to encourage similar label assignments for nearby query samples. The feature embedding (fθ) is learned from base classes using standard cross-entropy loss, without meta-learning. Optimization is performed through an iterative bound-optimization (Majorize-Minimization) technique applied to a concave-convex relaxation of the objective. This relaxation involves relaxing binary assignment constraints to soft assignments within a probability simplex and incorporating a negative-entropy barrier function. This yields closed-form, independent (parallel) updates for each query sample, ensuring convergence. Optionally, prototypes can be 'rectified' using a weighted combination of support and initially predicted query samples, and a 'cross-domain shift' correction can be applied to query features.
+
+# GitHub URLs List
+['https://github.com/imtiazziko/LaplacianShot']
+Output:
+{
+    "index": 0
+}
