@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+PALM comprises a DNN encoder (fθ) for feature extraction, followed by a projector (gϕ) that projects features to a lower-dimensional, normalized hyperspherical embedding (z). The core methodology involves modeling each ID class with a mixture of von Mises-Fisher (vMF) distributions, each defined by multiple prototypes (Pk) per class. Instead of single-prototype modeling, PALM dynamically learns and updates these prototypes. Samples are assigned to prototypes within their respective classes using an online soft cluster assignment method (based on Sinkhorn-Knopp algorithm) to calculate reciprocal neighbor assignment weights, which are then pruned via a top-K shrinkage operation. The learning process is regularized by two main objectives: a Maximum Likelihood Estimation (MLE) loss (LMLE) that encourages sample embeddings to be compact around their associated prototypes, and a novel prototype contrastive loss (Lproto-contra) that enhances intra-class compactness and inter-class discrimination at the prototype level. The overall training objective is LPALM = LMLE + λLproto-contra. Prototypes are updated asynchronously using an Exponential Moving Average (EMA) technique. For OOD detection scoring, PALM employs standard distance metrics such as Mahalanobis score or KNN distance on features from the penultimate layer. The framework also extends to unsupervised OOD detection by adapting the prototype contrastive loss to an unsupervised version and operating without class labels.
+
+# GitHub URLs List
+['https://github.com/jeff024/PALM']
+Output:
+{
+    "index": 0
+}
