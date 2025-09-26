@@ -545,7 +545,604 @@
         "tieredImageNet",
         "CIFAR-FS",
         "Meta-Dataset (ImageNet, Omniglot, CUB, Fungi, Aircraft, QuickDraw)"
-      ]
+      ],
+      "external_resources": {
+        "hugging_face": {
+          "models": [
+            {
+              "id": "timm/resnet50_clip.cc12m",
+              "author": "timm",
+              "sha": "d72a2fdb0278498f216ca970010d730b95249beb",
+              "created_at": "2024-10-23T16:25:47+00:00",
+              "last_modified": "2024-12-27T01:50:33+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 900,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "merges.txt"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "open_clip_config.json"
+                },
+                {
+                  "rfilename": "open_clip_model.safetensors"
+                },
+                {
+                  "rfilename": "open_clip_pytorch_model.bin"
+                },
+                {
+                  "rfilename": "pytorch_model.bin"
+                },
+                {
+                  "rfilename": "special_tokens_map.json"
+                }
+              ],
+              "card_data": {
+                "license": "mit",
+                "language": [],
+                "library_name": "open_clip",
+                "pipeline_tag": "zero-shot-image-classification",
+                "tags": [
+                  "clip"
+                ],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "open_clip",
+                "pytorch",
+                "safetensors",
+                "clip",
+                "zero-shot-image-classification",
+                "license:mit",
+                "region:us"
+              ],
+              "pipeline_tag": "zero-shot-image-classification",
+              "library_name": "open_clip",
+              "readme": "---\ntags:\n- clip\nlibrary_name: open_clip\npipeline_tag: zero-shot-image-classification\nlicense: mit\n---\n# Model card for resnet50_clip.cc12m\n\n## Model Details\n- **dataset:** CC12M\n\n## Model Usage\nThis model is a dual use `open_clip` and `timm` model. Model name in OpenCLIP is `RN50-quickgelu`, and timm name is `resnet50_clip.cc12m`.\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "thaottn/OpenCLIP-resnet50-CC12M",
+              "author": "thaottn",
+              "sha": "7a644e692faafe051a227f8e71d42fa5f179dfba",
+              "created_at": "2024-01-04T06:04:44+00:00",
+              "last_modified": "2024-01-04T06:04:58+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 370,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "merges.txt"
+                },
+                {
+                  "rfilename": "open_clip_config.json"
+                },
+                {
+                  "rfilename": "open_clip_model.safetensors"
+                },
+                {
+                  "rfilename": "open_clip_pytorch_model.bin"
+                },
+                {
+                  "rfilename": "special_tokens_map.json"
+                },
+                {
+                  "rfilename": "tokenizer.json"
+                },
+                {
+                  "rfilename": "tokenizer_config.json"
+                },
+                {
+                  "rfilename": "vocab.json"
+                }
+              ],
+              "card_data": {
+                "license": "mit",
+                "language": [],
+                "library_name": "open_clip",
+                "pipeline_tag": "zero-shot-image-classification",
+                "tags": [
+                  "clip"
+                ],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "open_clip",
+                "safetensors",
+                "clip",
+                "zero-shot-image-classification",
+                "license:mit",
+                "region:us"
+              ],
+              "pipeline_tag": "zero-shot-image-classification",
+              "library_name": "open_clip",
+              "readme": "---\ntags:\n- clip\nlibrary_name: open_clip\npipeline_tag: zero-shot-image-classification\nlicense: mit\n---\n# Model card for OpenCLIP-resnet50-CC12M\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "thaottn/OpenCLIP-resnet50-RedCaps12M",
+              "author": "thaottn",
+              "sha": "1a1b525c5aa720b6dcffbde0f9568159edd9dba3",
+              "created_at": "2024-01-04T06:13:39+00:00",
+              "last_modified": "2024-01-04T06:13:57+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 31,
+              "likes": 1,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "merges.txt"
+                },
+                {
+                  "rfilename": "open_clip_config.json"
+                },
+                {
+                  "rfilename": "open_clip_model.safetensors"
+                },
+                {
+                  "rfilename": "open_clip_pytorch_model.bin"
+                },
+                {
+                  "rfilename": "special_tokens_map.json"
+                },
+                {
+                  "rfilename": "tokenizer.json"
+                },
+                {
+                  "rfilename": "tokenizer_config.json"
+                },
+                {
+                  "rfilename": "vocab.json"
+                }
+              ],
+              "card_data": {
+                "license": "mit",
+                "language": [],
+                "library_name": "open_clip",
+                "pipeline_tag": "zero-shot-image-classification",
+                "tags": [
+                  "clip"
+                ],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "open_clip",
+                "safetensors",
+                "clip",
+                "zero-shot-image-classification",
+                "license:mit",
+                "region:us"
+              ],
+              "pipeline_tag": "zero-shot-image-classification",
+              "library_name": "open_clip",
+              "readme": "---\ntags:\n- clip\nlibrary_name: open_clip\npipeline_tag: zero-shot-image-classification\nlicense: mit\n---\n# Model card for OpenCLIP-resnet50-RedCaps12M\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "aaa12963337/msi-resnet18-pretrain",
+              "author": "aaa12963337",
+              "sha": "5816c340d48a4debd08eaca9950424c36e13703c",
+              "created_at": "2023-12-15T06:52:06+00:00",
+              "last_modified": "2023-12-15T07:21:09+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 19,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "training_args.bin"
+                }
+              ],
+              "card_data": {
+                "license": "apache-2.0",
+                "language": [],
+                "tags": [
+                  "generated_from_trainer"
+                ],
+                "datasets": [
+                  "imagefolder"
+                ],
+                "base_model": "microsoft/resnet-18",
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [
+                  "accuracy"
+                ],
+                "widget": []
+              },
+              "tags": [
+                "transformers",
+                "safetensors",
+                "resnet",
+                "image-classification",
+                "generated_from_trainer",
+                "dataset:imagefolder",
+                "base_model:microsoft/resnet-18",
+                "base_model:finetune:microsoft/resnet-18",
+                "license:apache-2.0",
+                "model-index",
+                "autotrain_compatible",
+                "endpoints_compatible",
+                "region:us"
+              ],
+              "pipeline_tag": "image-classification",
+              "library_name": "transformers",
+              "readme": "---\nlicense: apache-2.0\nbase_model: microsoft/resnet-18\ntags:\n- generated_from_trainer\ndatasets:\n- imagefolder\nmetrics:\n- accuracy\nmodel-index:\n- name: msi-resnet18-pretrain\n  results:\n  - task:\n      name: Image Classification\n      type: image-classification\n    dataset:\n      name: imagefolder\n      type: imagefolder\n      config: default\n      split: validation\n      args: default\n    metrics:\n    - name: Accuracy\n      type: accuracy\n      value: 0.908774373259053\n---\n\n<!-- This model card has been generated automatically according to the information the Trainer had access to. You\nshould probably proofread and complete it, then remove this comment. -->\n\n# msi-resnet18-pretrain\n\nThis model is a fine-tuned version of [microsoft/resnet-18](https://huggingface.co/microsoft/resnet-18) on the imagefolder dataset.\nIt achieves the following results on the evaluation set:\n- Loss: 0.2966\n- Accuracy: 0.9088\n\n## Model description\n\nMore information needed\n\n## Intended uses & limitations\n\nMore information needed\n\n## Training and evaluation data\n\nMore information needed\n\n## Training procedure\n\n### Training hyperparameters\n\nThe following hyperparameters were used during training:\n- learning_rate: 1e-05\n- train_batch_size: 16\n- eval_batch_size: 16\n- seed: 42\n- gradient_accumulation_steps: 4\n- total_train_batch_size: 64\n- optimizer: Adam with betas=(0.9,0.999) and epsilon=1e-08\n- lr_scheduler_type: linear\n- lr_scheduler_warmup_ratio: 0.1\n- num_epochs: 4\n\n### Training results\n\n| Training Loss | Epoch | Step | Validation Loss | Accuracy |\n|:-------------:|:-----:|:----:|:---------------:|:--------:|\n| 0.2719        | 1.0   | 1562 | 0.3501          | 0.8891   |\n| 0.1611        | 2.0   | 3125 | 0.2813          | 0.9118   |\n| 0.166         | 3.0   | 4687 | 0.3161          | 0.8930   |\n| 0.1071        | 4.0   | 6248 | 0.2966          | 0.9088   |\n\n\n### Framework versions\n\n- Transformers 4.35.2\n- Pytorch 2.0.1+cu118\n- Datasets 2.15.0\n- Tokenizers 0.15.0\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "timm/resnet50_clip_gap.cc12m",
+              "author": "timm",
+              "sha": "d6be7acbff046b6ae26032bbbe2f4f6e1aabaf3e",
+              "created_at": "2024-12-26T22:42:21+00:00",
+              "last_modified": "2025-01-21T22:05:20+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 19,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "config.json"
+                },
+                {
+                  "rfilename": "model.safetensors"
+                },
+                {
+                  "rfilename": "pytorch_model.bin"
+                }
+              ],
+              "card_data": {
+                "license": "apache-2.0",
+                "language": [],
+                "library_name": "timm",
+                "tags": [
+                  "image-feature-extraction",
+                  "timm",
+                  "transformers"
+                ],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "timm",
+                "pytorch",
+                "safetensors",
+                "image-feature-extraction",
+                "transformers",
+                "license:apache-2.0",
+                "region:us"
+              ],
+              "pipeline_tag": "image-feature-extraction",
+              "library_name": "timm",
+              "readme": "---\ntags:\n- image-feature-extraction\n- timm\n- transformers\nlibrary_name: timm\nlicense: apache-2.0\n---\n# Model card for resnet50_clip_gap.cc12m\n\n`timm` (image encoder only) weights\n",
+              "extracted_code": ""
+            }
+          ],
+          "datasets": [
+            {
+              "id": "timm/mini-imagenet",
+              "author": "timm",
+              "sha": "bd8779f9d33c061ea6e75fdd3bce4e43dd679060",
+              "created_at": "2024-11-20T22:17:09+00:00",
+              "last_modified": "2024-11-20T22:44:47+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 3703,
+              "likes": 13,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/test-00001-of-00002.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00001-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00002-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00003-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00004-of-00013.parquet"
+                },
+                {
+                  "rfilename": "data/train-00005-of-00013.parquet"
+                }
+              ],
+              "card_data": {
+                "license": "other",
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [
+                  "10K<n<100K"
+                ],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "license:other",
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "arxiv:1606.04080",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': n01532829\n          '1': n01558993\n          '2': n01704323\n          '3': n01749939\n          '4': n01770081\n          '5': n01843383\n          '6': n01855672\n          '7': n01910747\n          '8': n01930112\n          '9': n01981276\n          '10': n02074367\n          '11': n02089867\n          '12': n02091244\n          '13': n02091831\n          '14': n02099601\n          '15': n02101006\n          '16': n02105505\n          '17': n02108089\n          '18': n02108551\n          '19': n02108915\n          '20': n02110063\n          '21': n02110341\n          '22': n02111277\n          '23': n02113712\n          '24': n02114548\n          '25': n02116738\n          '26': n02120079\n          '27': n02129165\n          '28': n02138441\n          '29': n02165456\n          '30': n02174001\n          '31': n02219486\n          '32': n02443484\n          '33': n02457408\n          '34': n02606052\n          '35': n02687172\n          '36': n02747177\n          '37': n02795169\n          '38': n02823428\n          '39': n02871525\n          '40': n02950826\n          '41': n02966193\n          '42': n02971356\n          '43': n02981792\n          '44': n03017168\n          '45': n03047690\n          '46': n03062245\n          '47': n03075370\n          '48': n03127925\n          '49': n03146219\n          '50': n03207743\n          '51': n03220513\n          '52': n03272010\n          '53': n03337140\n          '54': n03347037\n          '55': n03400231\n          '56': n03417042\n          '57': n03476684\n          '58': n03527444\n          '59': n03535780\n          '60': n03544143\n          '61': n03584254\n          '62': n03676483\n          '63': n03770439\n          '64': n03773504\n          '65': n03775546\n          '66': n03838899\n          '67': n03854065\n          '68': n03888605\n          '69': n03908618\n          '70': n03924679\n          '71': n03980874\n          '72': n03998194\n          '73': n04067472\n          '74': n04146614\n          '75': n04149813\n          '76': n04243546\n          '77': n04251144\n          '78': n04258138\n          '79': n04275548\n          '80': n04296562\n          '81': n04389033\n          '82': n04418357\n          '83': n04435653\n          '84': n04443257\n          '85': n04509417\n          '86': n04515003\n          '87': n04522168\n          '88': n04596742\n          '89': n04604644\n          '90': n04612504\n          '91': n06794110\n          '92': n07584110\n          '93': n07613480\n          '94': n07697537\n          '95': n07747607\n          '96': n09246464\n          '97': n09256479\n          '98': n13054560\n          '99': n13133613\n  splits:\n  - name: train\n    num_bytes: 6284840508\n    num_examples: 50000\n  - name: validation\n    num_bytes: 1286953696\n    num_examples: 10000\n  - name: test\n    num_bytes: 670707560\n    num_examples: 5000\n  download_size: 7433461683\n  dataset_size: 8242501764\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: data/train-*\n  - split: validation\n    path: data/validation-*\n  - split: test\n    path: data/test-*\nlicense: other\nlicense_name: imagenet\nlicense_link: https://www.image-net.org/download.php\ntask_categories:\n- image-classification\npretty_name: Mini-ImageNet\nsize_categories:\n- 10K<n<100K\n---\n\n## Dataset Description\n\nA mini version of ImageNet-1k with 100 of 1000 classes present.\n\nUnlike some 'mini' variants this one includes the original images at their original sizes. Many such subsets downsample to 84x84 or other smaller resolutions.\n\n### Data Splits\n\n#### Train\n* 50000 samples from ImageNet-1k train split\n\n#### Validation\n* 10000 samples from ImageNet-1k train split\n\n#### Test\n* 5000 samples from ImageNet-1k validation split (all 50 samples per class)\n\n### Usage\n\nThis dataset is good for testing hparams and models in `timm`\n\n#### Train\n\n`python train.py --dataset hfds/timm/mini-imagenet --model resnet50 --amp --num-classes 100`\n\n### Citation Information\n\nFor the specific instance of this mini variant I am not sure what the origin is. It is different from commonly referenced [Vinyales et al.,2016](https://arxiv.org/abs/1606.04080) as it doesn't match the classes / splits.\n\nTrain & validation splits match train & test of https://www.kaggle.com/datasets/ctrnngtrung/miniimagenet ... it is not clear where that originated though.\n\nOriginal ImageNet citation:\n```bibtex\n@article{imagenet15russakovsky,\n    Author = {Olga Russakovsky and Jia Deng and Hao Su and Jonathan Krause and Sanjeev Satheesh and Sean Ma and Zhiheng Huang and Andrej Karpathy and Aditya Khosla and Michael Bernstein and Alexander C. Berg and Li Fei-Fei},\n    Title = { {ImageNet Large Scale Visual Recognition Challenge} },\n    Year = {2015},\n    journal   = {International Journal of Computer Vision (IJCV)},\n    doi = {10.1007/s11263-015-0816-y},\n    volume={115},\n    number={3},\n    pages={211-252}\n}\n```",
+              "extracted_code": ""
+            },
+            {
+              "id": "GATE-engine/mini_imagenet",
+              "author": "GATE-engine",
+              "sha": "f4fd85af7140e29002fdf9c121e38cc0bb7b3a1a",
+              "created_at": "2023-06-05T10:59:59+00:00",
+              "last_modified": "2023-12-02T22:44:53+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 1320,
+              "likes": 8,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00002-a07875a8dd83cc9a.parquet"
+                },
+                {
+                  "rfilename": "data/test-00001-of-00002-5ef02806b1ca244c.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00006-c7140eef5412dc9b.parquet"
+                },
+                {
+                  "rfilename": "data/train-00001-of-00006-cca25eb9a700a98a.parquet"
+                },
+                {
+                  "rfilename": "data/train-00002-of-00006-361ce01fe69ee584.parquet"
+                },
+                {
+                  "rfilename": "data/train-00003-of-00006-0d3c2a1a8099d74e.parquet"
+                },
+                {
+                  "rfilename": "data/train-00004-of-00006-cc1185f5721ab207.parquet"
+                },
+                {
+                  "rfilename": "data/train-00005-of-00006-b275fae4d289bd66.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [
+                  "image-classification"
+                ],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "task_categories:image-classification",
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype: int64\n  splits:\n  - name: train\n    num_bytes: 2533332667\n    num_examples: 38400\n  - name: validation\n    num_bytes: 623452894\n    num_examples: 9600\n  - name: test\n    num_bytes: 781497663\n    num_examples: 12000\n  download_size: 3938112512\n  dataset_size: 3938283224\ntask_categories:\n- image-classification\npretty_name: mini-imagenet\n---\n# Dataset Card for \"mini_imagenet\"\n\n[More Information needed](https://github.com/huggingface/datasets/blob/main/CONTRIBUTING.md#how-to-contribute-to-the-dataset-cards)",
+              "extracted_code": ""
+            },
+            {
+              "id": "dnth/mini-imagenet",
+              "author": "dnth",
+              "sha": "870b77a37d9c35471c99ee22cc55b823029889b5",
+              "created_at": "2024-11-27T03:35:12+00:00",
+              "last_modified": "2024-11-27T04:31:13+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 97,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/all-00000-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00001-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00002-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00003-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00004-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00005-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00006-of-00015.parquet"
+                },
+                {
+                  "rfilename": "data/all-00007-of-00015.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:dask",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': house finch, linnet, Carpodacus mexicanus\n          '1': robin, American robin, Turdus migratorius\n          '2': triceratops\n          '3': green mamba\n          '4': harvestman, daddy longlegs, Phalangium opilio\n          '5': toucan\n          '6': goose\n          '7': jellyfish\n          '8': nematode, nematode worm, roundworm\n          '9': king crab, Alaska crab, Alaskan king crab, Alaska king crab, Paralithodes\n            camtschatica\n          '10': dugong, Dugong dugon\n          '11': Walker hound, Walker foxhound\n          '12': Ibizan hound, Ibizan Podenco\n          '13': Saluki, gazelle hound\n          '14': golden retriever\n          '15': Gordon setter\n          '16': komondor\n          '17': boxer\n          '18': Tibetan mastiff\n          '19': French bulldog\n          '20': malamute, malemute, Alaskan malamute\n          '21': dalmatian, coach dog, carriage dog\n          '22': Newfoundland, Newfoundland dog\n          '23': miniature poodle\n          '24': white wolf, Arctic wolf, Canis lupus tundrarum\n          '25': African hunting dog, hyena dog, Cape hunting dog, Lycaon pictus\n          '26': Arctic fox, white fox, Alopex lagopus\n          '27': lion, king of beasts, Panthera leo\n          '28': meerkat, mierkat\n          '29': ladybug, ladybeetle, lady beetle, ladybird, ladybird beetle\n          '30': rhinoceros beetle\n          '31': ant, emmet, pismire\n          '32': black-footed ferret, ferret, Mustela nigripes\n          '33': three-toed sloth, ai, Bradypus tridactylus\n          '34': rock beauty, Holocanthus tricolor\n          '35': aircraft carrier, carrier, flattop, attack aircraft carrier\n          '36': ashcan, trash can, garbage can, wastebin, ash bin, ash-bin, ashbin,\n            dustbin, trash barrel, trash bin\n          '37': barrel, cask\n          '38': beer bottle\n          '39': bookshop, bookstore, bookstall\n          '40': cannon\n          '41': carousel, carrousel, merry-go-round, roundabout, whirligig\n          '42': carton\n          '43': catamaran\n          '44': chime, bell, gong\n          '45': clog, geta, patten, sabot\n          '46': cocktail shaker\n          '47': combination lock\n          '48': crate\n          '49': cuirass\n          '50': dishrag, dishcloth\n          '51': dome\n          '52': electric guitar\n          '53': file, file cabinet, filing cabinet\n          '54': fire screen, fireguard\n          '55': frying pan, frypan, skillet\n          '56': garbage truck, dustcart\n          '57': hair slide\n          '58': holster\n          '59': horizontal bar, high bar\n          '60': hourglass\n          '61': iPod\n          '62': lipstick, lip rouge\n          '63': miniskirt, mini\n          '64': missile\n          '65': mixing bowl\n          '66': oboe, hautboy, hautbois\n          '67': organ, pipe organ\n          '68': parallel bars, bars\n          '69': pencil box, pencil case\n          '70': photocopier\n          '71': poncho\n          '72': prayer rug, prayer mat\n          '73': reel\n          '74': school bus\n          '75': scoreboard\n          '76': slot, one-armed bandit\n          '77': snorkel\n          '78': solar dish, solar collector, solar furnace\n          '79': spider web, spider's web\n          '80': stage\n          '81': tank, army tank, armored combat vehicle, armoured combat vehicle\n          '82': theater curtain, theatre curtain\n          '83': tile roof\n          '84': tobacco shop, tobacconist shop, tobacconist\n          '85': unicycle, monocycle\n          '86': upright, upright piano\n          '87': vase\n          '88': wok\n          '89': worm fence, snake fence, snake-rail fence, Virginia fence\n          '90': yawl\n          '91': street sign\n          '92': consomme\n          '93': trifle\n          '94': hotdog, hot dog, red hot\n          '95': orange\n          '96': cliff, drop, drop-off\n          '97': coral reef\n          '98': bolete\n          '99': ear, spike, capitulum\n  splits:\n  - name: train\n    num_bytes: 5661216817.0\n    num_examples: 50000\n  - name: validation\n    num_bytes: 1127476741.0\n    num_examples: 10000\n  - name: test\n    num_bytes: 663008304.0\n    num_examples: 5000\n  download_size: 7433313256\n  dataset_size: 7451701862.0\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: data/train-*\n  - split: validation\n    path: data/validation-*\n  - split: test\n    path: data/test-*\n---\n",
+              "extracted_code": ""
+            },
+            {
+              "id": "GATE-engine/cifarfs",
+              "author": "GATE-engine",
+              "sha": "a804c12cc85675b0a21d85a664c578f902b915ef",
+              "created_at": "2023-06-05T17:32:39+00:00",
+              "last_modified": "2023-06-05T17:32:51+00:00",
+              "private": false,
+              "gated": false,
+              "disabled": false,
+              "downloads": 159,
+              "likes": 0,
+              "siblings": [
+                {
+                  "rfilename": ".gitattributes"
+                },
+                {
+                  "rfilename": "README.md"
+                },
+                {
+                  "rfilename": "data/test-00000-of-00001-6e06f87d92fce065.parquet"
+                },
+                {
+                  "rfilename": "data/train-00000-of-00001-b2e0d12edcc41ca1.parquet"
+                },
+                {
+                  "rfilename": "data/validation-00000-of-00001-e04b38bd7284925d.parquet"
+                }
+              ],
+              "card_data": {
+                "language": [],
+                "tags": [],
+                "datasets": [],
+                "task_categories": [],
+                "size_categories": [],
+                "metrics": [],
+                "widget": []
+              },
+              "tags": [
+                "size_categories:10K<n<100K",
+                "format:parquet",
+                "modality:image",
+                "library:datasets",
+                "library:pandas",
+                "library:mlcroissant",
+                "library:polars",
+                "region:us"
+              ],
+              "readme": "---\ndataset_info:\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype: int64\n  splits:\n  - name: train\n    num_bytes: 86489157.0\n    num_examples: 38400\n  - name: validation\n    num_bytes: 21539635.0\n    num_examples: 9600\n  - name: test\n    num_bytes: 26600575.0\n    num_examples: 12000\n  download_size: 134961942\n  dataset_size: 134629367.0\n---\n# Dataset Card for \"cifarfs\"\n\n[More Information needed](https://github.com/huggingface/datasets/blob/main/CONTRIBUTING.md#how-to-contribute-to-the-dataset-cards)",
+              "extracted_code": ""
+            }
+          ]
+        }
+      }
     }
   },
   "idea_info_history": [
