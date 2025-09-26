@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The core methodology involves minimizing a Laplacian-regularization objective E(Y) = N(Y) + λ/2 L(Y). The embedding function fθ is learned using standard cross-entropy loss on base classes, without meta-learning. N(Y) is a unary term based on Euclidean distances between query features and class prototypes (mean of support examples). L(Y) is a Laplacian regularizer using k-nearest neighbor affinities to encourage label consistency among nearby query samples. The optimization relaxes integer constraints on assignment variables and employs an iterative bound-optimization (MM framework) with a concave relaxation of L(Y) and a convex negative-entropy barrier. This results in fast, independent, and closed-form updates for each query sample. Optional prototype rectification (weighted combination of support and query features) and cross-domain shift correction are also employed for enhanced performance.
+
+# GitHub URLs List
+['https://github.com/imtiazziko/LaplacianShot']
+Output:
+{
+    "index": 0
+}
