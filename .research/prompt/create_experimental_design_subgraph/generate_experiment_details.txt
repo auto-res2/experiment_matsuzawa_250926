@@ -1,0 +1,158 @@
+
+Input:
+You are a cutting-edge AI researcher. Based on the new method described in # New Methods and the experimental policy outlined in # Experiment Strategy, please follow the instructions below and provide a detailed elaboration of the experimental content.
+
+# Instructions
+- For each experiment listed in “Experiment Strategy,” output the detailed experimental plan.
+- Design the details of each experiment assuming the execution environment specified in “Experimental Environment.”
+- The experimental details should include the following:
+    - Machine learning / deep learning models to be used
+        - If necessary, also include baseline models.
+    - Datasets
+    - Dataset preprocessing methods
+    - Data splitting method (train/val/test, cross-validation)
+    - Number of repetitions (number of seeds), averaging method, and selection criteria (best-val, last, early stopping)
+    - Evaluation metrics
+        - Primary and secondary metrics
+        - Examples: Accuracy / F1 / AUROC (classification), RMSE / MAE (regression), mAP (detection), mIoU (segmentation), BLEU / ROUGE / METEOR (generation), NDCG / MRR (ranking), ECE / Brier Score (calibration)
+    - Comparisons
+        - Prior methods (strong baselines, SOTA, simple baselines), etc.
+        - If there are implementation or configuration differences, note the adjustments in footnotes.
+    - Methods for analyzing important hyperparameters (e.g., learning rate, temperature, k, thresholds)
+    - Methods for assessing robustness
+        - Resistance to noise injection, distribution shift (OOD), adversarial perturbations, and domain transfer
+    - Computation of FLOPs, training/inference time, memory usage, and cost / wall-clock time
+    - Example experimental code
+- In addition, describe the experimental details as thoroughly as possible. It is acceptable if the output is long.
+- Avoid excessive redundancy across experiments. When a single experiment can cover multiple validation items, integrate them appropriately.
+- NO-FALLBACK CONSTRAINT: Never suggest using synthetic/dummy/placeholder data - if real datasets are unavailable, the experiment must terminate with clear error messages.
+- "Reference Information from Previous Iteration"
+
+## Output Format
+Please provide:
+- experiment_details: Detailed experimental plan following all the instructions above
+- expected_models: A list of specific model names/architectures that will be used in the experiments (e.g., ["ResNet-50", "BERT-base", "GPT-3.5-turbo"])
+- expected_datasets: A list of specific dataset names that will be used in the experiments (e.g., ["CIFAR-10", "ImageNet", "IMDB Reviews"])
+
+
+# Experimental Environment
+NVIDIA A100×8
+VRAM：80GB×8
+RAM：2048 GB
+
+# Current Research Method (Target for Experiment Design)
+{
+    "Open Problems": "Prototype-based few–shot classifiers (ProtoNets, simple prototype classifiers, EST+L2, etc.) still measure distances in an isotropic space.  Recent theory (\"A Closer Look at Prototype Classifier …\") shows that the generalization bound is dominated by  (i) the variance of the embedding‐vector norms and (ii) the within- / between-class variance ratio.  Standard training ignores these statistics – nothing in the loss explicitly encourages small norm variance or low within-class spread.  Consequently, the learned embedding can satisfy the cross-entropy (or episodic) objective while still having large norm variance, hurting generalization.",
+    "Methods": "Norm-Variance Regularised ProtoNet (NV-ProtoNet):  keep the original episodic ProtoNet loss Lce (cross-entropy on query vs. episode prototypes) and add a single, unsupervised regulariser that penalises variance of the L2 norms inside every meta-training episode.\n\nLoss = Lce  +  λ · Var(‖fθ(x)‖2)\n\nwhere the variance is computed over *all* support & query embeddings in the current episode (typical episode size ≤ 150, so the scalar is cheap).  Intuition: driving all embeddings to the same norm makes distances depend only on angles — exactly the condition under which the theoretical bound becomes tight; empirically this is what post-hoc L2-normalisation tries to achieve.  The proposed term achieves the same goal *during* training, so no post-hoc tricks or extra layers are needed.\n\nImplementation details:\n1. Forward pass exactly as in ProtoNet.\n2. Compute norms n = (embeddings.pow(2).sum(-1)).sqrt().\n3. Append λ·n.var() to the loss.\nλ is the only hyper-parameter (0.1 works well in pilot runs).",
+    "Experimental Setup": "Datasets: miniImageNet and CIFAR-FS with the standard 5-way 1-shot and 5-shot splits.\nBackbone: 64-64-64-64 convnet (to stay lightweight) or ResNet12; train ProtoNet baseline and NV-ProtoNet with identical settings except for the extra regulariser.\nHyper-parameter search: λ ∈ {0, 0.05, 0.1, 0.2} on the validation split.\nMetric: mean episode accuracy (600 episodes) with 95% CI.\nCompute also the variance of embedding norms on the *test* episodes to verify that the regulariser achieved its goal.",
+    "Experimental Code": "# key modification only – built on top of torchmeta ProtoNet implementation\n\ndef prototypical_loss(embeddings, targets, prototypes):\n    # original cross-entropy loss on query samples\n    dists = ((embeddings[:,None,:] - prototypes[None,:,:])**2).sum(-1)\n    log_p_y = (-dists).log_softmax(dim=1)\n    return -log_p_y.gather(1, targets.unsqueeze(1)).mean()\n\nλ = 0.1  # chosen on val split\n\nfor episode in loader:                      # standard episodic dataloader\n    support_x, support_y, query_x, query_y = episode\n    emb_support = f_theta(support_x)\n    emb_query   = f_theta(query_x)\n    # prototypes\n    protos = []\n    for c in support_y.unique():\n        protos.append(emb_support[support_y==c].mean(0))\n    protos = torch.stack(protos)\n\n    # standard ProtoNet loss\n    L_ce = prototypical_loss(emb_query, query_y, protos)\n\n    # *new* norm-variance regulariser\n    norms = torch.cat([emb_support, emb_query]).norm(p=2, dim=1)\n    L_var = norms.var(unbiased=False)\n\n    loss = L_ce + λ * L_var\n    loss.backward(); optimiser.step(); optimiser.zero_grad()",
+    "Expected Result": "Compared with the unregularised ProtoNet (baseline), NV-ProtoNet is expected to:\n• raise 5-way 1-shot accuracy by ≈1-2 percentage points (e.g. 51%→53% on miniImageNet) and 5-shot by ≈0.5-1 pp.\n• cut the norm variance on test episodes by >50%.\n• add virtually no computational overhead (only a few tensor ops per episode).",
+    "Expected Conclusion": "A single, theoretically-motivated variance penalty injected into the ProtoNet loss already yields measurable accuracy gains, confirming that controlling embedding-norm statistics during training is more effective than post-hoc L2 normalisation.  The idea is model-agnostic: the same one-line regulariser can be dropped into any metric-based few-shot learner or even standard classification training to obtain better calibrated, more transferable features."
+}
+
+# Experiment Strategy
+----------------------------------------------------------------
+EXPERIMENT 1   “Can NV-ProtoNet lift the ceiling of in-domain few-shot accuracy?”
+----------------------------------------------------------------
+Goal
+• Show absolute accuracy gains and reduced norm variance on the canonical miniImageNet / CIFAR-FS / tieredImageNet 5-way tasks.
+
+Protocol
+1. Datasets: miniImageNet, CIFAR-FS, tieredImageNet. 60 000 validation episodes per data set (standard splits).
+2. Models
+   a) ProtoNet (baseline)
+   b) ProtoNet + post-hoc L2 normalisation (popular trick)
+   c) NV-ProtoNet (λ ∈ {0,0.05,0.1,0.2,0.4})
+3. Backbones: Conv-4 and ResNet-12 (two points on the capacity axis).
+4. Training details: identical optimisers, data augmentations, early stopping on validation accuracy. 
+   ≈4 GPUs / run, 12 h each, well within the 8 × A100 budget.
+5. Measurements (on 10 000 held-out episodes, 95 % CI)
+   • mean accuracy (1-shot / 5-shot)
+   • embedding-norm variance (per episode & global)
+   • run-time per iteration (to verify negligible overhead)
+
+Expected Outcome
+• +1-2 pp in 1-shot and +0.5-1 pp in 5-shot across all three data sets vs. baseline; NV-ProtoNet beats post-hoc L2 in every split.
+• ≥50 % reduction of norm variance compared with ProtoNet, confirming that the regulariser works as intended.
+• Training throughput drop <1 %, proving the method is “free”.
+
+What it demonstrates
+Tight, statistically significant improvements on the community’s reference benchmarks with no tuning beyond λ. Lower norm variance directly correlates with higher accuracy, supporting the theoretical motivation.
+
+----------------------------------------------------------------
+EXPERIMENT 2   “Does norm-variance control help out-of-domain generalisation?”
+----------------------------------------------------------------
+Goal
+Test the claim that an embedding whose distances depend only on angles transfers better to unseen visual domains.
+
+Protocol
+1. Train on miniImageNet only (same setup as Exp 1).
+2. Zero-shot cross-domain evaluation on five disjoint fine-grained data sets used by Meta-Dataset: CUB, Cars, Aircraft, QuickDraw, Fungi.
+   (Each yields thousands of 5-way 1-shot / 5-shot episodes.)
+3. Models: ProtoNet, ProtoNet+L2, NV-ProtoNet (best λ from Exp 1).  ResNet-12 backbone.
+4. Metrics: mean episode accuracy, norm variance, and the within-/between-class scatter ratio S_w ⁄ S_b (a proxy for the theory-derived bound).
+
+Expected Outcome
+• NV-ProtoNet shows the largest accuracy margin when the target domain distribution is farthest from ImageNet (QuickDraw, Fungi) – e.g. +2-3 pp over baseline, while the in-domain gain was ~1 pp.
+• S_w ⁄ S_b is lower for NV-ProtoNet, explaining the stronger transfer.
+
+What it demonstrates
+Controlling norm variance is not a mere regulariser that overfits to the source data; it concretely improves domain-shift robustness, highlighting a key strength that simple post-hoc L2 normalisation cannot match.
+
+----------------------------------------------------------------
+EXPERIMENT 3   “Ablation & Plug-and-play: how universal is the variance penalty?”
+----------------------------------------------------------------
+Goal
+• Verify that the single-line loss term is universally beneficial and understand its sensitivity.
+
+Part A – λ sweep and convergence
+1. Use miniImageNet 5-way 1-shot with ResNet-12.
+2. Train NV-ProtoNet for λ ∈ {0,0.02,0.05,0.1,0.2,0.4,1.0}.
+3. Record accuracy and norm variance every 10 epochs.
+Expected: monotone decrease of norm variance; accuracy peaks around λ≈0.1-0.2, then degrades when the penalty dominates, validating the need for modest regularisation.
+
+Part B – Drop-in to other metric learners
+Replace ProtoNet with MatchingNet, RelationNet and Meta-Baseline, insert the identical Var(‖f(x)‖) penalty.
+Training details copied from the authors’ repos, λ fixed to 0.1.
+Expected: each algorithm gains ≥0.5 pp in 1-shot accuracy with negligible speed loss, confirming model-agnostic applicability.
+
+Part C – Computational footprint
+Measure wall-clock time, GPU memory, and FLOPs for one training step with and without the penalty on an A100.
+Expected: <0.5 % extra time, no extra memory (variance uses existing tensor).
+
+What it demonstrates
+1) The effect size tracks λ and plateaus – evidence that the regulariser, not chance, creates the gain. 2) The same one-liner benefits multiple backbones and algorithms → broad usefulness. 3) Virtually zero cost satisfies the “practical” criterion.
+
+----------------------------------------------------------------
+INTEGRATED TAKE-AWAY
+If all three experiments deliver the projected results, they jointly prove that NV-ProtoNet (i) yields statistically significant accuracy improvements on standard benchmarks, (ii) scales to more difficult cross-domain settings where angular information matters most, and (iii) is a drop-in, cost-free upgrade for a wide class of metric-based few-shot methods.  Together, these points compellingly validate the effectiveness of controlling embedding-norm variance during training.
+
+---
+
+
+# Reference Information from Previous Iteration
+
+Output:
+{
+    "experiment_details": "----------------------------------------------------------------\nCOMMON SETTINGS (apply to all experiments unless overridden)\n----------------------------------------------------------------\nHardware  :   8 × NVIDIA A100-80 GB, CUDA 11.8, PyTorch 2.1, torchmeta 1.10.\nOS / libs :   Ubuntu 22.04, Python 3.10, torchvision 0.16, timm 0.9, fvcore 0.1.5 for FLOP counting.\nFP format :   mixed-precision (FP16 autocast + Grad-Scaler) except when measuring numerical stability of variance term (then FP32).\nOptimiser  :  Adam, lr = 2 × 10⁻³ with cosine decay, weight-decay 5 × 10⁻⁴, batch-norm momentum 0.1.\nEpisodes   :  100 episodes / optimisation step, each 5-way {1,5}-shot, 15 queries / class (total ≤150 samples).\nSeeds      :  5 different RNG seeds {2023, 2024, 3021, 4096, 9001}.  Report mean ± StdErr across seeds and across 10 000 test episodes (≈95 % CI).\nStop       :  early stopping if validation accuracy does not improve for 20 epochs OR after 200 epochs max; checkpoint with best-val is kept.\nAveraging  :  results are averaged first over 10 000 episodes, then over 5 seeds.\nMetrics    :  Primary → mean 5-way accuracy; Secondary → norm-variance, run-time / iter, FLOPs/step, GPU Mem, S_w ⁄ S_b.\nRobustness :  additive Gaussian noise σ∈{0,0.05,0.1}, input JPEG compression q∈{100,50,10}, and random colour jitter are evaluated on 2 000 extra episodes per test set.\n----------------------------------------------------------------\nPre-processing (vision tasks)\n----------------------------------------------------------------\n1. Resize shorter side to 92 px → RandomCrop 84 px (miniImageNet/tieredImageNet) or 128→112 px (CIFAR-FS) → RandomHorizontalFlip(0.5).\n2. Normalise using ImageNet mean / std.  Test episodes use centre-crop, no flip.\n3. All Meta-Dataset domains are resized to 128 px short side and centre-cropped to 112 px.\n----------------------------------------------------------------\nEXPERIMENT 1   “In-domain ceiling”\n----------------------------------------------------------------\nDatasets        : miniImageNet, CIFAR-FS, tieredImageNet (official splits).\nModels          :\n  • Conv-4 ProtoNet (baseline)\n  • Conv-4 ProtoNet + post-hoc L2 normalisation¹\n  • Conv-4 NV-ProtoNet (λ∈{0,0.05,0.1,0.2,0.4})\n  • ResNet-12 ProtoNet (baseline)\n  • ResNet-12 ProtoNet + L2\n  • ResNet-12 NV-ProtoNet (same λ grid)\nEpisodes/train  : 6 000 / epoch, 200 epochs → ≈1.2 M episodes per run.\nGPU usage       : Conv-4 fits on 1 GPU (3 GB); ResNet-12 on 2 GPUs (11 GB).  We schedule 8 jobs in parallel (4 Conv-4 + 4 ResNet-12) → 12 h wall-clock.\nEvaluation      : 10 000 held-out episodes ×5 seeds.  Report Accuracy, Var(||f(x)||), throughput (fps).\nComparison      : accuracy delta to (i) ProtoNet baseline, (ii) ProtoNet+L2.\nHyper-param.    : λ chosen by best-val accuracy per backbone/datase, but the grid is reported.\nRobustness      : noise + JPEG stress-test on best-λ model vs. baseline.\nFLOPs / Time    : fvcore.FlopCountAnalysis + torch.cuda.Event timing on one episode (support+query).  Memory via torch.cuda.max_memory_reserved().\n----------------------------------------------------------------\nEXPERIMENT 2   “Cross-domain generalisation”\n----------------------------------------------------------------\nTrain set       : miniImageNet (identical to Exp 1, ResNet-12 backbone only).\nTest domains    : CUB-200-2011, Stanford Cars, FGVC-Aircraft, QuickDraw, Fungi (Meta-Dataset episode generators, 5-way {1,5}-shot, 1 000 episodes/domain ×5 seeds).\nModels          :\n  • ProtoNet\n  • ProtoNet + L2\n  • NV-ProtoNet (best λ from Exp 1, ≈0.1)\nAdditional Metr.: Within / Between scatter ratio S_w ⁄ S_b, distribution-shift accuracy drop, Expected Calibration Error (ECE @ 15 bins).\nRobustness      : Domain-shift already implicit; we also test additive RGB noise σ=0.05.\nCompute         : same codebase => no retraining cost except one 12 h run; evaluation <30 min / domain.\nAnalysis        : Correlate S_w ⁄ S_b with accuracy across domains (Pearson r) to link theory ↔ practice.\n----------------------------------------------------------------\nEXPERIMENT 3   “Ablation & Plug-and-play”\n----------------------------------------------------------------\nPart A  λ-sweep dynamics\n  • Dataset: miniImageNet 5-way 1-shot, ResNet-12.\n  • λ∈{0,0.02,0.05,0.1,0.2,0.4,1.0}; checkpoints saved every 10 epochs.\n  • Plot curves of (epoch vs. norm-variance, epoch vs. accuracy).\nPart B  Different metric learners\n  • Replace ProtoNet with MatchingNet, RelationNet, Meta-Baseline; backbone = ResNet-12; λ = 0.1.\n  • Train 100 epochs (Meta-Baseline 30 epochs as per repo to converge) ⇒ compare to their own baselines.\nPart C  Compute footprint\n  • Measure forward+backward time of one episode on a single A100 for (i) baseline, (ii) +Var term, using torch.cuda.Event.  Repeat 1 000×, average.\n  • Report ΔTime, ΔMem, ΔFLOPs (<0.5 %).\n----------------------------------------------------------------\nExample code snippet (PyTorch ≥2.0)\n----------------------------------------------------------------\nclass NVProtoNet(nn.Module):\n    def __init__(self, backbone, lambda_var=0.1):\n        super().__init__()\n        self.encoder = backbone\n        self.lambda_var = lambda_var\n    def _compute_prototypes(self, emb, targets):\n        classes = torch.unique(targets)\n        protos  = torch.stack([emb[targets==c].mean(0) for c in classes])\n        return protos, classes\n    def forward(self, support_x, support_y, query_x, query_y):\n        emb_s = self.encoder(support_x)\n        emb_q = self.encoder(query_x)\n        protos, classes = self._compute_prototypes(emb_s, support_y)\n        # pairwise squared L2 distances\n        dists = (emb_q[:,None,:]-protos[None,:,:]).pow(2).sum(-1)\n        log_p = (-dists).log_softmax(1)\n        L_ce  = F.nll_loss(log_p, query_y)\n        norms = torch.cat([emb_s, emb_q]).norm(dim=1)\n        L_var = norms.var(unbiased=False)\n        loss  = L_ce + self.lambda_var*L_var\n        return loss, L_ce.item(), L_var.item()\n----------------------------------------------------------------\nHow to reproduce (miniImageNet, Conv-4)\n----------------------------------------------------------------\n$ python train.py --model conv4 --dataset mini --shot 1 --lambda 0.1 \\\n                 --gpu 0 --episodes-per-epoch 6000 --epochs 200 \n# evaluate\n$ python evaluate.py --ckpt ckpts/conv4_mini_λ0.1_best.pth --test-episodes 10000 --gpu 0\n----------------------------------------------------------------\nFootnotes\n1  Post-hoc L2 means embeddings are L2-normalised *after* training (inference-time only), following standard practice in the literature.  Training regime is otherwise identical.\n----------------------------------------------------------------\n",
+    "expected_models": [
+        "Conv-4",
+        "ResNet-12",
+        "ProtoNet",
+        "ProtoNet+post-hoc L2",
+        "NV-ProtoNet",
+        "MatchingNet",
+        "RelationNet",
+        "Meta-Baseline"
+    ],
+    "expected_datasets": [
+        "miniImageNet",
+        "CIFAR-FS",
+        "tieredImageNet",
+        "CUB-200-2011",
+        "Stanford Cars",
+        "FGVC-Aircraft",
+        "QuickDraw",
+        "Fungi"
+    ]
+}
