@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+LaplacianShot proposes a transductive inference by minimizing a Laplacian-regularization objective. The objective function E(Y) consists of two terms: a unary term N(Y) that assigns query points to their nearest class prototype (e.g., Euclidean distance to mean of support examples), and a Laplacian regularizer L(Y) that encourages nearby query points to have consistent label assignments using an affinity matrix W (e.g., k-nearest neighbor). To optimize this objective, integer constraints on binary assignment variables are relaxed to soft assignments. A concave relaxation of the Laplacian term is used, augmented with a convex negative-entropy barrier function to handle simplex constraints. An iterative bound-optimization (Majorize-Minimization) technique is employed, yielding independent and closed-form updates for each query sample with guaranteed convergence. The method utilizes feature embeddings learned from base classes using standard cross-entropy loss, without meta-learning or episodic training. Prototypes can be standard (mean of support examples) or 'rectified' (weighted combination of support and initially classified query samples), and a cross-domain shift correction can be applied.
+
+# GitHub URLs List
+['https://github.com/imtiazziko/LaplacianShot']
+Output:
+{
+    "index": 0
+}
