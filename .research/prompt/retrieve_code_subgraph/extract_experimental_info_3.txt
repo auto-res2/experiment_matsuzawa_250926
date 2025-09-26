@@ -1,0 +1,3329 @@
+
+Input:
+You are a researcher with expertise in engineering in the field of machine learning.
+
+# Instructions
+- The content described in “Repository Content” corresponds to the GitHub repository of the method described in “Method.”
+- Please extract the following two pieces of information from “Repository Content”:
+    - experimental_code：Extract the implementation sections that are directly related to the method described in “Method.”
+    - experimental_info：Extract and output the experimental settings related to the method described in “Method.”
+
+# Method
+HYPO shapes hyperspherical embedding space to promote domain-invariant representations. The learning objective consists of two main parts: a variation loss (Lvar) to reduce intra-class variation by encouraging sample embeddings to be close to their class prototypes, and a separation loss (Lsep) to maximize inter-class separation by pushing different class prototypes apart. Normalized feature embeddings are used, and class prototype vectors are updated using an Exponential Moving Average (EMA). Classification during testing is performed by identifying the closest class prototype. The loss function is geometrically interpreted as performing maximum likelihood estimation under the von Mises-Fisher (vMF) distribution.
+
+# Repository Content
+File Path: dataloader/OfficeHomeLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+from PIL import Image
+from random import sample, random
+
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+ROOT_PATH = 'datasets/OfficeHomeDataset/'
+
+class OfficeHomeDataset(data.Dataset):
+    def __init__(self, setname, target_domain, augment_full = True):
+
+        self._image_transformer_test = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        if augment_full:
+            self._image_transformer_train = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else: 
+            self._image_transformer_train = self._image_transformer_test
+
+        if setname != 'test':
+            fulldata = []
+            label_name = []
+            fullconcept = []
+            i = 0
+            domain = ['Art', 'Clipart', 'Product', 'RealWorld']
+            domain.remove(target_domain)
+            for domain_name in domain:
+                txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+                images, labels = self._dataset_info(txt_path)
+                concept = [i] * len(labels)
+                fulldata.extend(images)
+                label_name.extend(labels)
+                fullconcept.extend(concept)
+                i += 1
+
+            name_train, name_val, labels_train, labels_val, concept_train, concept_val = self.get_random_subset(fulldata, label_name, fullconcept, 0.1)
+
+            if setname == 'train':
+                self.data = name_train
+                self.label = labels_train
+                self.concept = concept_train
+            elif setname == 'val':
+                self.data = name_val
+                self.label = labels_val
+                self.concept = concept_val
+        else:
+            domain_name = target_domain
+            txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+            self.data, self.label = self._dataset_info(txt_path)
+            self.concept = [-1] * len(self.label)
+
+        self.setname = setname
+
+
+    def _dataset_info(self, txt_labels):
+        with open(txt_labels, 'r') as f:
+            images_list = f.readlines()
+
+        file_names = []
+        labels = []
+        for row in images_list:
+            row = row.split(' ')
+            path = os.path.join(row[0])
+            path = path.replace('\\', '/')
+
+            file_names.append(path)
+            labels.append(int(row[1]))
+
+        return file_names, labels
+
+    def get_random_subset(self, names, labels, concepts, percent):
+        """
+        :param names: list of names
+        :param labels:  list of labels
+        :param percent: 0 < float < 1
+        :return:
+        """
+        samples = len(names)
+        amount = int(samples * percent)
+        random_index = sample(range(samples), amount)
+        name_val = [names[k] for k in random_index]
+        name_train = [v for k, v in enumerate(names) if k not in random_index]
+        labels_val = [labels[k] for k in random_index]
+        labels_train = [v for k, v in enumerate(labels) if k not in random_index]
+        concepts_val = [concepts[k] for k in random_index]
+        concepts_train = [v for k, v in enumerate(concepts) if k not in random_index]
+
+        return name_train, name_val, labels_train, labels_val, concepts_train, concepts_val
+
+
+
+
+    def __getitem__(self, index):
+        data, label, concept= self.data[index], self.label[index], self.concept[index]
+
+        _img = Image.open(data).convert('RGB')
+        if self.setname == 'val' or self.setname == 'test':
+            img = self._image_transformer_test(_img)
+            return img, label, concept
+        else:
+            img = self._image_transformer_train(_img)
+            return img, label, concept
+
+    def __len__(self):
+        return len(self.data)
+
+
+File Path: dataloader/PACSLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+from PIL import Image
+from random import sample, random
+
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+ROOT_PATH = '/datasets/pacs_data/'
+
+class PACSDataset(data.Dataset):
+    def __init__(self, setname, target_domain, augment_full = True):
+
+        self._image_transformer_test = transforms.Compose([
+            transforms.Resize(224, Image.BILINEAR),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        if augment_full:
+            self._image_transformer_train = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else: 
+            self._image_transformer_train = self._image_transformer_test
+
+        if setname != 'test':
+            fulldata = []
+            label_name = []
+            fullconcept = []
+            i = 0
+            domain = ['cartoon', 'art_painting', 'photo', 'sketch']
+            domain.remove(target_domain)
+            for domain_name in domain:
+                txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+                images, labels = self._dataset_info(txt_path)
+                concept = [i] *len(labels)
+                fulldata.extend(images)
+                label_name.extend(labels)
+                fullconcept.extend(concept)
+                i += 1
+
+            name_train, name_val, labels_train, labels_val, concept_train, concept_val = self.get_random_subset(fulldata, label_name, fullconcept, 0.1)
+
+            if setname == 'train':
+                self.data = name_train
+                self.label = labels_train
+                self.concept = concept_train
+            elif setname == 'val':
+                self.data = name_val
+                self.label = labels_val
+                self.concept = concept_val
+        else:
+            domain_name = target_domain
+            txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+            self.data, self.label = self._dataset_info(txt_path)
+            self.concept = [-1] * len(self.label) #dummy 
+
+        self.setname = setname
+
+
+    def _dataset_info(self, txt_labels):
+        with open(txt_labels, 'r') as f:
+            images_list = f.readlines()
+
+        file_names = []
+        labels = []
+        for row in images_list:
+            row = row.split(' ')
+            path = os.path.join(row[0])
+            path = path.replace('\\', '/')
+
+            file_names.append(path)
+            labels.append(int(row[1]))
+
+        return file_names, labels
+
+    def get_random_subset(self, names, labels, concepts, percent):
+        """
+        :param names: list of names
+        :param labels:  list of labels
+        :param percent: 0 < float < 1
+        :return:
+        """
+        samples = len(names)
+        amount = int(samples * percent)
+        random_index = sample(range(samples), amount)
+        name_val = [names[k] for k in random_index]
+        name_train = [v for k, v in enumerate(names) if k not in random_index]
+        labels_val = [labels[k] for k in random_index]
+        labels_train = [v for k, v in enumerate(labels) if k not in random_index]
+        concepts_val = [concepts[k] for k in random_index]
+        concepts_train = [v for k, v in enumerate(concepts) if k not in random_index]
+
+        return name_train, name_val, labels_train, labels_val, concepts_train, concepts_val
+
+
+
+
+    def __getitem__(self, index):
+        data, label, concept= self.data[index], self.label[index], self.concept[index]
+
+        _img = Image.open(data).convert('RGB')
+        if self.setname == 'val' or self.setname == 'test':
+            img = self._image_transformer_test(_img)
+            return img, label, concept
+        else:
+            img = self._image_transformer_train(_img)
+            return img, label, concept
+
+    def __len__(self):
+        return len(self.data)
+
+
+File Path: dataloader/TerraLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+from PIL import Image
+from random import sample, random
+
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+ROOT_PATH = '/datasets/terra_incognita'
+
+class TerraDataset(data.Dataset):
+    def __init__(self, setname, target_domain, augment_full = True):
+
+        self._image_transformer_test = transforms.Compose([
+            transforms.Resize(224, Image.BILINEAR),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        if augment_full:
+            self._image_transformer_train = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else: 
+            self._image_transformer_train = self._image_transformer_test
+
+        if setname != 'test':
+            fulldata = []
+            label_name = []
+            fullconcept = []
+            i = 0
+            domain = ['location_38', 'location_43', 'location_46', 'location_100']
+            domain.remove(target_domain)
+            for domain_name in domain:
+                txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+                images, labels = self._dataset_info(txt_path)
+                concept = [i] *len(labels)
+                fulldata.extend(images)
+                label_name.extend(labels)
+                fullconcept.extend(concept)
+                i += 1
+
+            name_train, name_val, labels_train, labels_val, concept_train, concept_val = self.get_random_subset(fulldata, label_name, fullconcept, 0.1)
+
+            if setname == 'train':
+                self.data = name_train
+                self.label = labels_train
+                self.concept = concept_train
+            elif setname == 'val':
+                self.data = name_val
+                self.label = labels_val
+                self.concept = concept_val
+        else:
+            domain_name = target_domain
+            txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+            self.data, self.label = self._dataset_info(txt_path)
+            self.concept = [-1] *len(self.label)
+
+        self.setname = setname
+
+
+    def _dataset_info(self, txt_labels):
+        with open(txt_labels, 'r') as f:
+            images_list = f.readlines()
+
+        file_names = []
+        labels = []
+        for row in images_list:
+            row = row.split(' ')
+            path = os.path.join(row[0])
+            path = path.replace('\\', '/')
+
+            file_names.append(path)
+            labels.append(int(row[1]))
+
+        return file_names, labels
+
+    def get_random_subset(self, names, labels, concepts, percent):
+        """
+        :param names: list of names
+        :param labels:  list of labels
+        :param percent: 0 < float < 1
+        :return:
+        """
+        samples = len(names)
+        amount = int(samples * percent)
+        random_index = sample(range(samples), amount)
+        name_val = [names[k] for k in random_index]
+        name_train = [v for k, v in enumerate(names) if k not in random_index]
+        labels_val = [labels[k] for k in random_index]
+        labels_train = [v for k, v in enumerate(labels) if k not in random_index]
+        concepts_val = [concepts[k] for k in random_index]
+        concepts_train = [v for k, v in enumerate(concepts) if k not in random_index]
+
+        return name_train, name_val, labels_train, labels_val, concepts_train, concepts_val
+
+
+
+
+    def __getitem__(self, index):
+        data, label, concept= self.data[index], self.label[index], self.concept[index]
+
+        _img = Image.open(data).convert('RGB')
+        if self.setname == 'val' or self.setname == 'test':
+            img = self._image_transformer_test(_img)
+            return img, label, concept
+        else:
+            img = self._image_transformer_train(_img)
+            return img, label, concept
+
+    def __len__(self):
+        return len(self.data)
+
+
+File Path: dataloader/VLCSLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+from PIL import Image
+from random import sample, random
+
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+ROOT_PATH = '/datasets/VLCSDataset/'
+
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+class VLCSDataset(data.Dataset):
+    def __init__(self, setname, target_domain, augment_full = True):
+
+        self._image_transformer_test = transforms.Compose([
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        if augment_full:
+            self._image_transformer_train = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else: 
+            self._image_transformer_train = self._image_transformer_test
+
+        if setname != 'test':
+            fulldata = []
+            label_name = []
+            fullconcept = []
+            i = 0
+            domain = ['Caltech101', 'LabelMe', 'SUN09', 'VOC2007']
+            domain.remove(target_domain)
+            for domain_name in domain:
+                txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+                images, labels = self._dataset_info(txt_path)
+                concept = [i] *len(labels)
+                fulldata.extend(images)
+                label_name.extend(labels)
+                fullconcept.extend(concept)
+                i += 1
+
+            name_train, name_val, labels_train, labels_val, concept_train, concept_val = self.get_random_subset(fulldata, label_name, fullconcept, 0.1)
+
+            if setname == 'train':
+                self.data = name_train
+                self.label = labels_train
+                self.concept = concept_train
+            elif setname == 'val':
+                self.data = name_val
+                self.label = labels_val
+                self.concept = concept_val
+        else:
+            domain_name = target_domain
+            txt_path = os.path.join(ROOT_PATH, domain_name + '.txt')
+            self.data, self.label = self._dataset_info(txt_path)
+            self.concept = [-1]*len(self.label)
+
+        self.setname = setname
+
+
+    def _dataset_info(self, txt_labels):
+        with open(txt_labels, 'r') as f:
+            images_list = f.readlines()
+
+        file_names = []
+        labels = []
+        for row in images_list:
+            row = row.split(' ')
+            path = os.path.join(row[0])
+            path = path.replace('\\', '/')
+
+            file_names.append(path)
+            labels.append(int(row[1]))
+
+        return file_names, labels
+
+    def get_random_subset(self, names, labels, concepts, percent):
+        """
+        :param names: list of names
+        :param labels:  list of labels
+        :param percent: 0 < float < 1
+        :return:
+        """
+        samples = len(names)
+        amount = int(samples * percent)
+        random_index = sample(range(samples), amount)
+        name_val = [names[k] for k in random_index]
+        name_train = [v for k, v in enumerate(names) if k not in random_index]
+        labels_val = [labels[k] for k in random_index]
+        labels_train = [v for k, v in enumerate(labels) if k not in random_index]
+        concepts_val = [concepts[k] for k in random_index]
+        concepts_train = [v for k, v in enumerate(concepts) if k not in random_index]
+
+        return name_train, name_val, labels_train, labels_val, concepts_train, concepts_val
+
+
+
+
+    def __getitem__(self, index):
+        data, label, concept= self.data[index], self.label[index], self.concept[index]
+
+        _img = Image.open(data).convert('RGB')
+        if self.setname == 'val' or self.setname == 'test':
+            img = self._image_transformer_test(_img)
+            return img, label, concept
+        else:
+            img = self._image_transformer_train(_img)
+            return img, label, concept
+
+    def __len__(self):
+        return len(self.data)
+
+
+File Path: dataloader/corcifarLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+
+
+class CorCIFARDataset(data.Dataset):
+    def __init__(self, ood_loc, set_name, cortype, dataset):
+
+        if dataset == 'CIFAR-10':
+            print('loading CorCIFAR-10')
+
+            # CorCIFAR_train_path = './data/cifar10_trainc'
+            # CorCIFAR_test_path = './data/cifar10_testc'
+            CorCIFAR_train_path = f'{ood_loc}/CorCIFAR10_train'
+            CorCIFAR_test_path = f'{ood_loc}/CorCIFAR10_test'
+            self.num_class = 10
+
+        # elif dataset in ['CIFAR-100']:
+        #     print('loading CorCIFAR-100')
+
+        #     CorCIFAR_train_path = './data/cifar100_trainc'
+        #     CorCIFAR_test_path = './data/cifar100_testc'  
+        #     self.num_class = 100
+
+        mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+        std = [x / 255 for x in [63.0, 62.1, 66.7]]
+
+        self._image_transformer = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
+
+        if set_name == 'train':
+            images=np.load(os.path.join(CorCIFAR_train_path, cortype + '.npy'))
+            labels = np.load(os.path.join(CorCIFAR_train_path, 'labels.npy'))
+        elif set_name == 'test':
+            images = np.load(os.path.join(CorCIFAR_test_path, cortype + '.npy'))
+            labels = np.load(os.path.join(CorCIFAR_test_path, 'labels.npy'))
+
+        self.data = images
+        self.label = labels
+
+    def __getitem__(self, index):
+        img, label = self.data[index], self.label[index]
+        img = self._image_transformer(img)
+        
+        return img, label
+
+    def __len__(self):
+        return len(self.data)
+
+
+
+
+
+
+
+
+
+
+
+File Path: dataloader/corimagenetLoader.py
+Content:
+import numpy as np
+import torch
+import torch.utils.data as data
+import torchvision
+
+from torchvision import datasets
+import torch
+from torchvision import transforms
+from torch.utils.data import DataLoader, ConcatDataset
+
+import os.path as osp
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
+import os
+
+from random import sample, random
+
+CorIMAGENET100_train_path = './ImageNet-100-C/train'
+CorIMAGENET100_test_path = './ImageNet-100-C/val'
+
+class CorIMAGENETDataset(data.Dataset):
+    def __init__(self, set_name, cortype):
+
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+        self._image_transformer = transforms.Compose([
+            transforms.ToTensor(),
+            normalize
+        ])
+
+        self.set_name = set_name
+
+        if set_name == 'train':
+            images = np.load(os.path.join(CorIMAGENET100_train_path, cortype + '.npy'))
+            labels = np.load(os.path.join(CorIMAGENET100_train_path, 'labels.npy'))
+        elif set_name == 'test':
+            images = np.load(os.path.join(CorIMAGENET100_test_path, cortype + '.npy'))
+            labels = np.load(os.path.join(CorIMAGENET100_test_path, 'labels.npy'))
+
+        self.data = images
+        self.label = labels
+
+        self.num_class = 100
+
+    def __getitem__(self, index):
+        img, label = self.data[index], self.label[index]
+        img = self._image_transformer(img)
+       
+        return img, label
+
+    def __len__(self):
+        return len(self.data)
+
+
+
+
+
+
+
+
+
+
+
+File Path: eval_hypo.py
+Content:
+import argparse
+import math
+import os
+import time
+from datetime import datetime
+import logging
+# import tensorboard_logger as tb_logger
+import pprint
+
+import torch
+import torch.nn.parallel
+import torch.nn.functional as F
+import torch.optim
+import torch.utils.data
+import numpy as np
+
+
+from make_datasets_cifar import *
+
+from sklearn.metrics import accuracy_score
+
+from utils import (CompLoss, DisLoss, DisLPLoss, set_loader_small, set_loader_ImageNet, set_model)
+
+parser = argparse.ArgumentParser(description='Eval HYPO')
+parser.add_argument('--gpu', default=7, type=int, help='which GPU to use')
+parser.add_argument('--seed', default=4, type=int, help='random seed')  # original 4
+parser.add_argument('--w', default=2, type=float,
+                    help='loss scale')
+parser.add_argument('--proto_m', default= 0.99, type=float,
+                   help='weight of prototype update')
+parser.add_argument('--feat_dim', default = 128, type=int,
+                    help='feature dim')
+parser.add_argument('--in-dataset', default="CIFAR-10", type=str, help='ID dataset name', choices=['PACS', 'CIFAR-10', 'ImageNet-100'])
+parser.add_argument('--id_loc', default="datasets", type=str, help='location of ID dataset')
+parser.add_argument('--ood_loc', default="datasets", type=str, help='location of OOD dataset')
+parser.add_argument('--model', default='resnet18', type=str, help='model architecture: [resnet18, wrt40, wrt28, densenet100, resnet50, resnet34]')
+parser.add_argument('--head', default='mlp', type=str, help='either mlp or linear head')
+parser.add_argument('--loss', default = 'hypo', type=str, choices = ['hypo'],
+                    help='name of experiment')
+
+parser.add_argument('--ckpt_name', type=str, default='ckpt_hypo_resnet18_cifar10',
+                        help='name of the model checkpoint')
+
+parser.add_argument('--ckpt_loc', type=str, default='checkpoints/CIFAR-10',
+                        help='loc of the model checkpoint')
+parser.add_argument('-b', '--batch_size', default= 128, type=int, 
+                    help='mini-batch size (default: 64)')
+parser.add_argument('--print-freq', '-p', default=10, type=int,
+                    help='print frequency (default: 10)')
+parser.add_argument('--temp', type=float, default=0.1,
+                        help='temperature for loss function')
+parser.add_argument('--normalize', action='store_true',
+                        help='normalize feat embeddings')
+parser.add_argument('--prefetch', type=int, default=4, help='Pre-fetching threads.')
+parser.add_argument('--target_domain', type=str, default='sketch', choices=['sketch', 'photo', 'art_painting', 'cartoon'])
+parser.add_argument('--cortype', type=str, default='gaussian_noise', help='data type of corrupted datasets')
+
+parser.set_defaults(bottleneck=True)
+parser.set_defaults(augment=True)
+
+args = parser.parse_args()
+
+
+state = {k: v for k, v in args._get_kwargs()}
+
+date_time = datetime.now().strftime("%d_%m_%H:%M")
+
+args.log_directory = "logs/eval/{in_dataset}/{name}/".format(in_dataset=args.in_dataset, name= args.ckpt_name)
+if not os.path.exists(args.log_directory):
+    os.makedirs(args.log_directory)
+
+
+#init log
+log = logging.getLogger(__name__)
+formatter = logging.Formatter('%(asctime)s : %(message)s')
+fileHandler = logging.FileHandler(os.path.join(args.log_directory, "eval_info.log"), mode='w')
+fileHandler.setFormatter(formatter)
+streamHandler = logging.StreamHandler()
+streamHandler.setFormatter(formatter)
+log.setLevel(logging.DEBUG)
+log.addHandler(fileHandler)
+log.addHandler(streamHandler) 
+
+log.debug(state)
+
+if args.in_dataset == "CIFAR-10":
+    args.n_cls = 10
+elif args.in_dataset == "PACS":
+    args.n_cls = 7
+elif args.in_dataset == "VLCS":
+    args.n_cls = 5
+elif args.in_dataset == "OfficeHome":
+    args.n_cls = 65
+elif args.in_dataset == 'terra_incognita':
+    args.n_cls = 10
+elif args.in_dataset in ["CIFAR-100", "ImageNet-100"]:
+    args.n_cls = 100
+
+
+#set seeds
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+np.random.seed(args.seed)
+log.debug(f"Evaluating {args.ckpt_name}")
+
+        
+def to_np(x): return x.data.cpu().numpy()
+
+
+if args.in_dataset == 'CIFAR-10':
+    val_loader, test_loader_ood = make_datasets(args.id_loc, args.ood_loc, args.in_dataset, state, args.cortype)
+
+else:
+    train_loader, val_loader, test_loader_ood = set_loader_small(args)
+
+
+print("\n len(loader_in.dataset) {}, " \
+    "len(test_loader_ood.dataset) {}".format(
+    len(val_loader.dataset),
+    len(test_loader_ood.dataset)))
+
+
+def main():
+
+    model = set_model(args)
+
+    model_name=f'{args.ckpt_loc}/{args.ckpt_name}.pth.tar'
+    model.load_state_dict(torch.load(model_name)['state_dict'])
+
+    criterion_dis = DisLoss(args, model, val_loader, temperature=args.temp).cuda() # V2: prototypes with EMA style update
+
+    criterion_dis.load_state_dict(torch.load(model_name)['dis_state_dict'])
+
+
+    model.eval()
+
+
+    print("computing over distribution ID dataset. \n")
+    with torch.no_grad():
+        accuracies_in = []
+        for data, target in val_loader:
+            data, target = data.cuda(), target.cuda()
+
+            penultimate = model.encoder(data).squeeze()
+            penultimate = F.normalize(penultimate, dim=1)
+
+            features = model.forward(data)
+
+            feat_dot_prototype = torch.div(torch.matmul(features, criterion_dis.prototypes.T), args.temp)
+
+            # for numerical stability
+            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+            logits = feat_dot_prototype - logits_max.detach()
+
+            pred = logits.data.max(1)[1]
+            accuracies_in.append(accuracy_score(list(to_np(pred)), list(to_np(target))))
+
+    acc = sum(accuracies_in) / len(accuracies_in)
+    print("ID accuracy: {}".format(acc))
+
+    print("computing over test distribution cor dataset. \n")
+    with torch.no_grad():
+        accuracies_cor = []
+        for data, target in test_loader_ood:
+            data, target = data.cuda(), target.cuda()
+
+            penultimate = model.encoder(data).squeeze()
+            penultimate = F.normalize(penultimate, dim=1)
+
+            features = model.forward(data)
+
+            feat_dot_prototype = torch.div(torch.matmul(features, criterion_dis.prototypes.T), args.temp)
+
+            # for numerical stability
+            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+            logits = feat_dot_prototype - logits_max.detach()
+
+            pred = logits.data.max(1)[1]
+            accuracies_cor.append(accuracy_score(list(to_np(pred)), list(to_np(target))))
+
+    acc_cor = sum(accuracies_cor) / len(accuracies_cor)
+
+    if args.in_dataset == 'CIFAR-10':  
+        print("OOD accuracy for generalization: {}, corrupted types is: {}".format(acc_cor, args.cortype))
+    else:
+        print("OOD accuracy for generalization: {}, target domain is: {}".format(acc_cor, args.target_domain))
+
+
+
+
+if __name__ == '__main__':
+    main()
+
+File Path: make_datasets_cifar.py
+Content:
+import numpy as np
+import os
+import pickle
+import argparse
+import time
+import torch
+import torch.nn as nn
+import torch.backends.cudnn as cudnn
+
+import torchvision
+
+import torchvision.transforms as trn
+import torchvision.datasets as dset
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from torch.utils.data import TensorDataset
+
+from os import path
+import sys
+sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
+import pathlib
+
+'''
+This script makes the datasets used in eval cifar. The main function is make_datasets. 
+'''
+
+
+
+def load_CIFAR(id_loc, dataset, classes=[]):
+
+    mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+    std = [x / 255 for x in [63.0, 62.1, 66.7]]
+
+    # train_transform = trn.Compose([trn.RandomHorizontalFlip(), trn.RandomCrop(32, padding=4),
+    #                                trn.ToTensor(), trn.Normalize(mean, std)])
+    train_transform = trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)])
+    test_transform = trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)])
+
+    if dataset == 'CIFAR-10':
+        cifar10_path = f'{id_loc}/cifar10'
+        print('loading CIFAR-10')
+        train_data = dset.CIFAR10(
+            cifar10_path, train=True, transform=train_transform, download=True)
+        test_data = dset.CIFAR10(
+            cifar10_path, train=False, transform=test_transform, download=True)
+
+    # elif dataset in ['CIFAR-100']:
+    #     cifar100_path = f'{id_loc}/cifar100'
+    #     print('loading CIFAR-100')
+    #     train_data = dset.CIFAR100(
+    #         cifar100_path, train=True, transform=train_transform, download=True)
+    #     test_data = dset.CIFAR100(
+    #         cifar100_path, train=False, transform=test_transform, download=True)
+
+    return train_data, test_data
+
+def load_CorCifar(ood_loc, dataset, cortype):
+
+    if dataset == 'CIFAR-10':
+        print('loading CorCIFAR-10')
+
+        from dataloader.corcifarLoader import CorCIFARDataset as Dataset
+
+        train_data = Dataset(ood_loc, 'train', cortype, dataset)
+        test_data = Dataset(ood_loc, 'test', cortype, dataset)
+
+    # elif dataset in ['CIFAR-100']:
+    #     print('loading CorCIFAR-100')
+
+    #     from dataloader.corcifar100Loader import CorCIFARDataset as Dataset
+
+    #     train_data = Dataset('train', cortype, dataset)
+    #     test_data = Dataset('test', cortype, dataset)
+
+    return train_data, test_data
+
+def make_datasets(id_loc, ood_loc, in_dset, state, cortype):
+    #rng = np.random.default_rng(state['seed'])
+
+    print('building datasets...')
+    train_in_data, test_in_data = load_CIFAR(id_loc, in_dset)
+    train_cor_data, test_cor_data = load_CorCifar(ood_loc, in_dset, cortype)
+
+    test_loader_in = torch.utils.data.DataLoader(
+        test_in_data,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+    test_loader_cor = torch.utils.data.DataLoader(
+        test_cor_data,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+    return test_loader_in, test_loader_cor
+
+File Path: models/__init__.py
+Content:
+from __future__ import absolute_import
+
+from .resnet import *
+from .densenet import *
+File Path: models/densenet.py
+Content:
+import torch
+
+import torch.nn as nn
+import torch.optim as optim
+
+import torch.nn.functional as F
+from torch.autograd import Variable
+
+import torchvision.datasets as dset
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+
+import torchvision.models as models
+
+import sys
+import math
+
+class Bottleneck(nn.Module):
+    def __init__(self, nChannels, growthRate):
+        super(Bottleneck, self).__init__()
+        interChannels = 4*growthRate
+        self.bn1 = nn.BatchNorm2d(nChannels)
+        self.conv1 = nn.Conv2d(nChannels, interChannels, kernel_size=1,
+                               bias=False)
+        self.bn2 = nn.BatchNorm2d(interChannels)
+        self.conv2 = nn.Conv2d(interChannels, growthRate, kernel_size=3,
+                               padding=1, bias=False)
+
+    def forward(self, x):
+        out = self.conv1(F.relu(self.bn1(x)))
+        out = self.conv2(F.relu(self.bn2(out)))
+        out = torch.cat((x, out), 1)
+        return out
+
+class SingleLayer(nn.Module):
+    def __init__(self, nChannels, growthRate):
+        super(SingleLayer, self).__init__()
+        self.bn1 = nn.BatchNorm2d(nChannels)
+        self.conv1 = nn.Conv2d(nChannels, growthRate, kernel_size=3,
+                               padding=1, bias=False)
+
+    def forward(self, x):
+        out = self.conv1(F.relu(self.bn1(x)))
+        out = torch.cat((x, out), 1)
+        return out
+
+class Transition(nn.Module):
+    def __init__(self, nChannels, nOutChannels):
+        super(Transition, self).__init__()
+        self.bn1 = nn.BatchNorm2d(nChannels)
+        self.conv1 = nn.Conv2d(nChannels, nOutChannels, kernel_size=1,
+                               bias=False)
+
+    def forward(self, x):
+        out = self.conv1(F.relu(self.bn1(x)))
+        out = F.avg_pool2d(out, 2)
+        return out
+
+class DenseNet(nn.Module):
+    def __init__(self, growthRate = 12, depth = 100, reduction = 0.5, bottleneck = True):
+        super(DenseNet, self).__init__()
+
+        nDenseBlocks = (depth-4) // 3
+        if bottleneck:
+            nDenseBlocks //= 2
+
+        nChannels = 2*growthRate
+        self.conv1 = nn.Conv2d(3, nChannels, kernel_size=3, padding=1,
+                               bias=False)
+        self.dense1 = self._make_dense(nChannels, growthRate, nDenseBlocks, bottleneck)
+        nChannels += nDenseBlocks*growthRate
+        nOutChannels = int(math.floor(nChannels*reduction))
+        self.trans1 = Transition(nChannels, nOutChannels)
+
+        nChannels = nOutChannels
+        self.dense2 = self._make_dense(nChannels, growthRate, nDenseBlocks, bottleneck)
+        nChannels += nDenseBlocks*growthRate
+        nOutChannels = int(math.floor(nChannels*reduction))
+        self.trans2 = Transition(nChannels, nOutChannels)
+
+        nChannels = nOutChannels
+        self.dense3 = self._make_dense(nChannels, growthRate, nDenseBlocks, bottleneck)
+        nChannels += nDenseBlocks*growthRate
+
+        self.bn1 = nn.BatchNorm2d(nChannels)
+        # self.fc = nn.Linear(nChannels, nClasses)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
+    def _make_dense(self, nChannels, growthRate, nDenseBlocks, bottleneck):
+        layers = []
+        for i in range(int(nDenseBlocks)):
+            if bottleneck:
+                layers.append(Bottleneck(nChannels, growthRate))
+            else:
+                layers.append(SingleLayer(nChannels, growthRate))
+            nChannels += growthRate
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.trans1(self.dense1(out))
+        out = self.trans2(self.dense2(out))
+        out = self.dense3(out)
+        out = torch.squeeze(F.avg_pool2d(F.relu(self.bn1(out)), 8))
+        # out = F.log_softmax(self.fc(out))
+        return out
+
+    def intermediate_forward(self, x, layer_index):
+        out = self.conv1(x)
+        out = self.trans1(self.dense1(out))
+        out = self.trans2(self.dense2(out))
+        out = self.dense3(out)
+        out = F.relu(self.bn1(out))
+        # out = torch.squeeze(F.avg_pool2d(F.relu(self.bn1(out)), 8))
+        # out = F.log_softmax(self.fc(out))
+        return out
+
+    def feature_list(self, x):
+        out_list = []
+        out = self.conv1(x)
+        out = self.trans1(self.dense1(out))
+        out = self.trans2(self.dense2(out))
+        out = self.dense3(out)
+        out = F.relu(self.bn1(out))
+        out_list.append(out)
+        # out = torch.squeeze(F.avg_pool2d(F.relu(self.bn1(out)), 8))
+        # out = F.log_softmax(self.fc(out))
+        return out_list
+
+model_dict = {
+    'densenet100': [DenseNet, 342],
+}
+
+class SupCEHeadDenseNet(nn.Module):
+    """encoder + classifier"""
+    def __init__(self, name='densenet100', head='linear', feat_dim = 128, num_classes=100, multiplier = 1):
+        super(SupCEHeadDenseNet, self).__init__()
+        model_fun, dim_in = model_dict[name]
+        self.encoder = model_fun()
+        self.fc = nn.Linear(dim_in, num_classes)
+        self.multiplier = multiplier
+
+        if head == 'linear':
+            self.head = nn.Linear(dim_in, feat_dim)
+        elif head == 'mlp':
+            self.head = nn.Sequential(
+                nn.Linear(dim_in, dim_in),
+                nn.ReLU(inplace=True),
+                nn.Linear(dim_in, feat_dim)
+            )
+        
+
+    def forward(self, x):
+        features = self.encoder(x)
+        return self.fc(features)
+    
+    def intermediate_forward(self, x, layer_index):
+        if layer_index == 0:
+            return self.encoder.intermediate_forward(x, layer_index)
+        elif layer_index == 1:
+            feat = self.encoder(x)
+            feat = self.multiplier * F.normalize(self.head(feat), dim=1) 
+            return feat
+File Path: models/head_wrn_vmf.py
+Content:
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+
+#from wrn_vmf import *
+
+class BasicBlock(nn.Module):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.0):
+        super(BasicBlock, self).__init__()
+        self.bn1 = nn.BatchNorm2d(in_planes)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                               padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_planes)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1,
+                               padding=1, bias=False)
+        self.droprate = dropRate
+        self.equalInOut = (in_planes == out_planes)
+        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                                                                padding=0, bias=False) or None
+
+    def forward(self, x):
+        if not self.equalInOut:
+            x = self.relu1(self.bn1(x))
+        else:
+            out = self.relu1(self.bn1(x))
+        if self.equalInOut:
+            out = self.relu2(self.bn2(self.conv1(out)))
+        else:
+            out = self.relu2(self.bn2(self.conv1(x)))
+        if self.droprate > 0:
+            out = F.dropout(out, p=self.droprate, training=self.training)
+        out = self.conv2(out)
+        if not self.equalInOut:
+            return torch.add(self.convShortcut(x), out)
+        else:
+            return torch.add(x, out)
+
+
+class NetworkBlock(nn.Module):
+    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0):
+        super(NetworkBlock, self).__init__()
+        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
+
+    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
+        layers = []
+        for i in range(nb_layers):
+            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.layer(x)
+
+
+class WideResNet(nn.Module):
+    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0):
+        super(WideResNet, self).__init__()
+        nChannels = [16, 16 * widen_factor, 32 * widen_factor, 64 * widen_factor]
+        assert ((depth - 4) % 6 == 0)
+        n = (depth - 4) // 6
+        block = BasicBlock
+        # 1st conv before any network block
+        self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
+                               padding=1, bias=False)
+        # 1st block
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate)
+        # 2nd block
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate)
+        # 3rd block
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate)
+        # global average pooling and classifier
+        self.bn1 = nn.BatchNorm2d(nChannels[3])
+        self.relu = nn.ReLU(inplace=True)
+        self.fc = nn.Linear(nChannels[3], num_classes)
+        self.nChannels = nChannels[3]
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.bias.data.zero_()
+
+    def forward(self, x):
+        #import pdb
+        #pdb.set_trace()
+
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = F.avg_pool2d(out, 8)
+        out = out.view(-1, self.nChannels) # 64 x 128
+        features = out.view(-1, self.nChannels) # 64 x 128
+        #out = self.fc(out)
+        #return self.fc(out)
+        #return out
+        return self.fc(features), features
+
+    def intermediate_forward(self, x, layer_index):
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = F.avg_pool2d(out, 8)
+        out = out.view(-1, self.nChannels)
+        return out
+    
+    def feature_list(self, x):
+        out_list = [] 
+        out = self.conv1(x)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out_list.append(out)
+        out = F.avg_pool2d(out, 8)
+        out = out.view(-1, self.nChannels)
+        return self.fc(out), out_list
+         
+
+
+
+
+class HeadWideResNet(nn.Module):
+    """encoder + head"""
+    #def __init__(self, args, num_classes):
+    def __init__(self, args):
+        super(HeadWideResNet, self).__init__()
+        #model_fun, dim_in = model_dict[args.model]
+        #if args.in_dataset == 'ImageNet-100':
+        #    model = models.resnet34(pretrained=True)
+        #    for name, p in model.named_parameters():
+        #        if not name.startswith('layer4'):
+        #            p.requires_grad = False
+
+        num_classes = 10
+        layers = 40
+        widen_factor = 2
+        droprate = 0.3
+
+        #model = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate)
+        model = WideResNet(layers, num_classes, widen_factor, droprate)
+        model_name = '/u/b/a/baihaoyue/private/ood_detection/woods_ood/CIFAR/snapshots/pretrained/cifar10_wrn_pretrained_epoch_99.pt'
+        if os.path.isfile(model_name):
+            print('found pretrained model')
+            #net.load_state_dict(torch.load(model_name)['params'])
+            model.load_state_dict(torch.load(model_name))
+            print('Model restored!')
+        dim_in = model.fc.in_features
+        #modules=list(model.children())[:-1] # remove last linear layer
+        #modules=list(model.children())
+        #self.encoder =nn.Sequential(*modules)
+        self.encoder = model
+        #else:
+        #    self.encoder = model_fun()
+        #self.fc = nn.Linear(dim_in, args.n_cls)
+        self.fc = nn.Linear(dim_in, num_classes)
+        #self.multiplier = multiplier
+        if args.head == 'linear':
+            self.head = nn.Linear(dim_in, args.feat_dim)
+        elif args.head == 'mlp':
+            self.head = nn.Sequential(
+                nn.Linear(dim_in, dim_in),
+                nn.ReLU(inplace=True),
+                nn.Linear(dim_in, args.feat_dim)
+            )
+    
+    def forward(self, x):
+        #import pdb
+        #pdb.set_trace()
+        #feat = self.encoder(x).squeeze()
+        x, feat = self.encoder(x)
+        unnorm_features = self.head(feat)
+        features= F.normalize(unnorm_features, dim=1)
+        return features
+    
+    def intermediate_forward(self, x):
+        feat = self.encoder(x).squeeze()
+        return F.normalize(feat, dim=1)
+
+
+
+
+
+File Path: models/resnet.py
+Content:
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1, is_last=False):
+        super(BasicBlock, self).__init__()
+        self.is_last = is_last
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        preact = out
+        out = F.relu(out)
+        if self.is_last:
+            return out, preact
+        else:
+            return out
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, in_planes, planes, stride=1, is_last=False):
+        super(Bottleneck, self).__init__()
+        self.is_last = is_last
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv3 = nn.Conv2d(planes, self.expansion * planes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(self.expansion * planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out += self.shortcut(x)
+        preact = out
+        out = F.relu(out)
+        if self.is_last:
+            return out, preact
+        else:
+            return out
+
+
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, in_channel=3, zero_init_residual=False):
+        super(ResNet, self).__init__()
+        self.in_planes = 64
+
+        self.conv1 = nn.Conv2d(in_channel, 64, kernel_size=3, stride=1, padding=1,
+                               bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves
+        # like an identity. This improves the model by 0.2~0.3% according to:
+        # https://arxiv.org/abs/1706.02677
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck):
+                    nn.init.constant_(m.bn3.weight, 0)
+                elif isinstance(m, BasicBlock):
+                    nn.init.constant_(m.bn2.weight, 0)
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for i in range(num_blocks):
+            stride = strides[i]
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x, layer=100):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = self.avgpool(out)
+        #now out dim: batch_size, 512, 1, 1
+        out = torch.flatten(out, 1) #start_dim = 1
+        return out
+
+    # function to extact a specific feature
+    def intermediate_forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)              
+        return out
+
+    # function to extact the multiple features
+    def feature_list(self, x):
+        out_list = []
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out_list.append(out)
+        return out_list
+
+
+def resnet18(**kwargs):
+    return ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+
+
+def resnet34(**kwargs):
+    return ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+
+
+def resnet50(**kwargs):
+    return ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+
+
+def resnet101(**kwargs):
+    return ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
+
+
+model_dict = {
+    'resnet18': [resnet18, 512],
+    'resnet34': [resnet34, 512],
+    'resnet50': [resnet50, 2048],
+    'resnet101': [resnet101, 2048],
+}
+
+
+class LinearBatchNorm(nn.Module):
+    """Implements BatchNorm1d by BatchNorm2d, for SyncBN purpose"""
+    def __init__(self, dim, affine=True):
+        super(LinearBatchNorm, self).__init__()
+        self.dim = dim
+        self.bn = nn.BatchNorm2d(dim, affine=affine)
+
+    def forward(self, x):
+        x = x.view(-1, self.dim, 1, 1)
+        x = self.bn(x)
+        x = x.view(-1, self.dim)
+        return x
+
+class SupCEResNet(nn.Module):
+    """encoder + classifier"""
+    def __init__(self, name='resnet18', normalize = False,  num_classes=10):
+        super(SupCEResNet, self).__init__()
+        model_fun, dim_in = model_dict[name]
+        self.encoder = model_fun()
+        self.fc = nn.Linear(dim_in, num_classes)
+        self.normalize = normalize
+
+    def forward(self, x):
+        features = self.encoder(x)
+        if self.normalize: 
+            features =  F.normalize(features, dim=1)
+        return self.fc(features)
+
+class SupCEHeadResNet(nn.Module):
+    """encoder + head"""
+    def __init__(self, args, multiplier = 1):
+        super(SupCEHeadResNet, self).__init__()
+        model_fun, dim_in = model_dict[args.model]
+
+        if args.model == 'resnet50':
+            model = models.resnet50(pretrained=True)
+            #for name, p in model.named_parameters():
+            #    if not name.startswith('layer4'):
+            #        p.requires_grad = False
+            for module in model.modules():
+                if isinstance(module, nn.BatchNorm2d):
+                    if hasattr(module, 'weight'):
+                        module.weight.requires_grad_(False)
+                    if hasattr(module, 'bias'):
+                        module.bias.requires_grad_(False)
+                    module.eval()
+            modules=list(model.children())[:-1] # remove last linear layer
+            self.encoder =nn.Sequential(*modules)
+        elif args.model == 'resnet34':
+            model = models.resnet34(pretrained=True)
+            for name, p in model.named_parameters():
+                if not name.startswith('layer4'):
+                    p.requires_grad = False
+            modules=list(model.children())[:-1] # remove last linear layer
+            self.encoder =nn.Sequential(*modules)
+
+        else:
+            self.encoder = model_fun()
+  
+        self.fc = nn.Linear(dim_in, args.n_cls)
+        self.multiplier = multiplier
+        self.dropout = nn.Dropout(0.5)
+
+        if args.head == 'linear':
+            self.head = nn.Sequential(nn.Linear(dim_in, args.feat_dim))
+        elif args.head == 'mlp':
+            self.head = nn.Sequential(
+                nn.Linear(dim_in, dim_in),
+                nn.ReLU(inplace=True),
+                nn.Linear(dim_in, args.feat_dim)
+            )
+    
+    
+    def forward(self, x):
+
+        feat = self.encoder(x).squeeze()
+        unnorm_features = self.head(feat)
+        features= F.normalize(unnorm_features, dim=1)
+        return features
+    
+    def intermediate_forward(self, x):
+        feat = self.encoder(x).squeeze()
+        return F.normalize(feat, dim=1)
+
+class LinearClassifier(nn.Module):
+    """Linear classifier"""
+    def __init__(self, name='resnet18', num_classes=10):
+        super(LinearClassifier, self).__init__()
+        _, feat_dim = model_dict[name]
+        self.fc = nn.Linear(feat_dim, num_classes)
+
+    def forward(self, features):
+        return self.fc(features)
+
+File Path: scripts/download.py
+Content:
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+
+from torchvision.datasets import MNIST
+import xml.etree.ElementTree as ET
+from zipfile import ZipFile
+import argparse
+import tarfile
+import shutil
+import gdown
+import uuid
+import json
+import os
+import urllib
+
+
+# utils #######################################################################
+
+def stage_path(data_dir, name):
+    full_path = os.path.join(data_dir, name)
+
+    if not os.path.exists(full_path):
+        os.makedirs(full_path)
+
+    return full_path
+
+
+def download_and_extract(url, dst, remove=True):
+    gdown.download(url, dst, quiet=False)
+
+    if dst.endswith(".tar.gz"):
+        tar = tarfile.open(dst, "r:gz")
+        tar.extractall(os.path.dirname(dst))
+        tar.close()
+
+    if dst.endswith(".tar"):
+        tar = tarfile.open(dst, "r:")
+        tar.extractall(os.path.dirname(dst))
+        tar.close()
+
+    if dst.endswith(".zip"):
+        zf = ZipFile(dst, "r")
+        zf.extractall(os.path.dirname(dst))
+        zf.close()
+
+    if remove:
+        os.remove(dst)
+
+
+# VLCS ########################################################################
+
+# Slower, but builds dataset from the original sources
+#
+# def download_vlcs(data_dir):
+#     full_path = stage_path(data_dir, "VLCS")
+#
+#     tmp_path = os.path.join(full_path, "tmp/")
+#     if not os.path.exists(tmp_path):
+#         os.makedirs(tmp_path)
+#
+#     with open("domainbed/misc/vlcs_files.txt", "r") as f:
+#         lines = f.readlines()
+#         files = [line.strip().split() for line in lines]
+#
+#     download_and_extract("http://pjreddie.com/media/files/VOCtrainval_06-Nov-2007.tar",
+#                          os.path.join(tmp_path, "voc2007_trainval.tar"))
+#
+#     download_and_extract("https://drive.google.com/uc?id=1I8ydxaAQunz9R_qFFdBFtw6rFTUW9goz",
+#                          os.path.join(tmp_path, "caltech101.tar.gz"))
+#
+#     download_and_extract("http://groups.csail.mit.edu/vision/Hcontext/data/sun09_hcontext.tar",
+#                          os.path.join(tmp_path, "sun09_hcontext.tar"))
+#
+#     tar = tarfile.open(os.path.join(tmp_path, "sun09.tar"), "r:")
+#     tar.extractall(tmp_path)
+#     tar.close()
+#
+#     for src, dst in files:
+#         class_folder = os.path.join(data_dir, dst)
+#
+#         if not os.path.exists(class_folder):
+#             os.makedirs(class_folder)
+#
+#         dst = os.path.join(class_folder, uuid.uuid4().hex + ".jpg")
+#
+#         if "labelme" in src:
+#             # download labelme from the web
+#             gdown.download(src, dst, quiet=False)
+#         else:
+#             src = os.path.join(tmp_path, src)
+#             shutil.copyfile(src, dst)
+#
+#     shutil.rmtree(tmp_path)
+
+
+def download_vlcs(data_dir):
+    # Original URL: http://www.eecs.qmul.ac.uk/~dl307/project_iccv2017
+    full_path = stage_path(data_dir, "VLCS")
+
+    download_and_extract("https://drive.google.com/uc?id=1skwblH1_okBwxWxmRsp9_qi15hyPpxg8",
+                         os.path.join(data_dir, "VLCS.tar.gz"))
+
+
+# PACS ########################################################################
+
+def download_pacs(data_dir):
+    # Original URL: http://www.eecs.qmul.ac.uk/~dl307/project_iccv2017
+    full_path = stage_path(data_dir, "PACS")
+
+    download_and_extract("https://drive.google.com/uc?id=1JFr8f805nMUelQWWmfnJR3y4_SYoN5Pd",
+                         os.path.join(data_dir, "PACS.zip"))
+
+    os.rename(os.path.join(data_dir, "kfold"),
+              full_path)
+
+
+# Office-Home #################################################################
+
+def download_office_home(data_dir):
+    # Original URL: http://hemanthdv.org/OfficeHome-Dataset/
+    full_path = stage_path(data_dir, "office_home")
+
+    download_and_extract("https://drive.google.com/uc?id=1uY0pj7oFsjMxRwaD3Sxy0jgel0fsYXLC",
+                         os.path.join(data_dir, "office_home.zip"))
+
+    os.rename(os.path.join(data_dir, "OfficeHomeDataset_10072016"),
+              full_path)
+
+
+# DomainNET ###################################################################
+
+def download_domain_net(data_dir):
+    # Original URL: http://ai.bu.edu/M3SDA/
+    full_path = stage_path(data_dir, "domain_net")
+
+    urls = [
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/groundtruth/clipart.zip",
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/infograph.zip",
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/groundtruth/painting.zip",
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/quickdraw.zip",
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/real.zip",
+        "http://csr.bu.edu/ftp/visda/2019/multi-source/sketch.zip"
+    ]
+
+    for url in urls:
+        download_and_extract(url, os.path.join(full_path, url.split("/")[-1]))
+
+    with open("domainbed/misc/domain_net_duplicates.txt", "r") as f:
+        for line in f.readlines():
+            try:
+                os.remove(os.path.join(full_path, line.strip()))
+            except OSError:
+                pass
+
+
+# TerraIncognita ##############################################################
+
+def download_terra_incognita(data_dir):
+    # Original URL: https://beerys.github.io/CaltechCameraTraps/
+    # New URL: http://lila.science/datasets/caltech-camera-traps
+
+    full_path = stage_path(data_dir, "terra_incognita")
+
+    download_and_extract(
+        "https://lilablobssc.blob.core.windows.net/caltechcameratraps/eccv_18_all_images_sm.tar.gz",
+        os.path.join(full_path, "terra_incognita_images.tar.gz"))
+
+    download_and_extract(
+        "https://lilablobssc.blob.core.windows.net/caltechcameratraps/labels/caltech_camera_traps.json.zip",
+        os.path.join(full_path, "caltech_camera_traps.json.zip"))
+
+    include_locations = ["38", "46", "100", "43"]
+
+    include_categories = [
+        "bird", "bobcat", "cat", "coyote", "dog", "empty", "opossum", "rabbit",
+        "raccoon", "squirrel"
+    ]
+
+    images_folder = os.path.join(full_path, "eccv_18_all_images_sm/")
+    annotations_file = os.path.join(full_path, "caltech_images_20210113.json")
+    destination_folder = full_path
+
+    stats = {}
+
+    if not os.path.exists(destination_folder):
+        os.mkdir(destination_folder)
+
+    with open(annotations_file, "r") as f:
+        data = json.load(f)
+
+    category_dict = {}
+    for item in data['categories']:
+        category_dict[item['id']] = item['name']
+
+    for image in data['images']:
+        image_location = image['location']
+
+        if image_location not in include_locations:
+            continue
+
+        loc_folder = os.path.join(destination_folder,
+                                  'location_' + str(image_location) + '/')
+
+        if not os.path.exists(loc_folder):
+            os.mkdir(loc_folder)
+
+        image_id = image['id']
+        image_fname = image['file_name']
+
+        for annotation in data['annotations']:
+            if annotation['image_id'] == image_id:
+                if image_location not in stats:
+                    stats[image_location] = {}
+
+                category = category_dict[annotation['category_id']]
+
+                if category not in include_categories:
+                    continue
+
+                if category not in stats[image_location]:
+                    stats[image_location][category] = 0
+                else:
+                    stats[image_location][category] += 1
+
+                loc_cat_folder = os.path.join(loc_folder, category + '/')
+
+                if not os.path.exists(loc_cat_folder):
+                    os.mkdir(loc_cat_folder)
+
+                dst_path = os.path.join(loc_cat_folder, image_fname)
+                src_path = os.path.join(images_folder, image_fname)
+
+                shutil.copyfile(src_path, dst_path)
+
+    shutil.rmtree(images_folder)
+    os.remove(annotations_file)
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Download datasets')
+    parser.add_argument('--data_dir', type=str, required=True)
+    args = parser.parse_args()
+
+    # download_pacs(args.data_dir)
+    # download_office_home(args.data_dir)
+    # download_domain_net(args.data_dir)
+    # download_vlcs(args.data_dir)
+    download_terra_incognita(args.data_dir)
+
+
+File Path: train_hypo.py
+Content:
+import argparse
+import math
+import os
+import time
+from datetime import datetime
+import logging
+import tensorboard_logger as tb_logger
+import pprint
+
+import torch
+import torch.nn.parallel
+import torch.nn.functional as F
+import torch.optim
+import torch.utils.data
+import numpy as np
+
+
+import wandb
+wandb.login()
+
+from sklearn.metrics import accuracy_score
+
+from utils import (CompLoss, CompNGLoss, DisLoss, DisLPLoss, 
+                AverageMeter, adjust_learning_rate, warmup_learning_rate, 
+                set_loader_small, set_loader_ImageNet, set_model)
+
+parser = argparse.ArgumentParser(description='Script for training with HYPO')
+parser.add_argument('--gpu', default=6, type=int, help='which GPU to use')
+parser.add_argument('--seed', default=4, type=int, help='random seed')  # original 4
+parser.add_argument('--w', default=2, type=float,
+                    help='loss scale')
+parser.add_argument('--proto_m', default= 0.95, type=float,
+                   help='weight of prototype update')
+parser.add_argument('--feat_dim', default = 128, type=int,
+                    help='feature dim')
+parser.add_argument('--in-dataset', default="CIFAR-10", type=str, help='in-distribution dataset', choices=['PACS', 'VLCS', 'CIFAR-10', 'CIFAR-100', 'ImageNet-100', 'OfficeHome', 'terra_incognita'])
+parser.add_argument('--id_loc', default="datasets/CIFAR10", type=str, help='location of in-distribution dataset')
+parser.add_argument('--model', default='resnet18', type=str, help='model architecture: [resnet18, wrt40, wrt28, wrt16, densenet100, resnet50, resnet34]') 
+parser.add_argument('--head', default='mlp', type=str, help='either mlp or linear head')
+parser.add_argument('--loss', default = 'hypo', type=str, choices = ['hypo', 'erm'],
+                    help='name of experiment')
+parser.add_argument('--epochs', default=50, type=int,
+                    help='number of total epochs to run')
+parser.add_argument('--trial', type=str, default='0',
+                        help='id for recording multiple runs')
+parser.add_argument('--save-epoch', default=100, type=int,
+                    help='save the model every save_epoch')
+parser.add_argument('--start-epoch', default=0, type=int,
+                    help='manual epoch number (useful on restarts)')
+parser.add_argument('-b', '--batch_size', default= 32, type=int, #512 # batch-size
+                    help='mini-batch size (default: 64)')
+parser.add_argument('--learning_rate', default=5e-4, type=float,
+                    help='initial learning rate')
+# if linear lr schedule
+parser.add_argument('--lr_decay_epochs', type=str, default='100,150,180',
+                        help='where to decay lr, can be a list')
+parser.add_argument('--lr_decay_rate', type=float, default=0.1,
+                        help='decay rate for learning rate')
+# if cosine lr schedule
+parser.add_argument('--cosine', action='store_true',
+                        help='using cosine annealing')
+parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+                    help='weight decay (default: 0.0001)')
+parser.add_argument('--print-freq', '-p', default=10, type=int,
+                    help='print frequency (default: 10)')
+parser.add_argument('--temp', type=float, default=0.1,
+                        help='temperature for loss function')
+parser.add_argument('--warm', action='store_true',
+                        help='warm-up for large batch training')
+parser.add_argument('--normalize', action='store_true',
+                        help='normalize feat embeddings')
+
+# add pacs specific
+parser.add_argument('--prefetch', type=int, default=4, help='Pre-fetching threads.')
+parser.add_argument('--target_domain', type=str, default='cartoon')
+
+# debug
+parser.add_argument('--use_domain', type=bool, default=False, help='whether to use in-domain negative pairs in compactness loss')
+parser.add_argument('--mode', default='online', choices = ['online','disabled'], help='whether disable wandb logging')
+
+parser.set_defaults(bottleneck=True)
+parser.set_defaults(augment=True)
+
+args = parser.parse_args()
+torch.cuda.set_device(args.gpu) 
+state = {k: v for k, v in args._get_kwargs()}
+
+date_time = datetime.now().strftime("%d_%m_%H:%M")
+
+#processing str to list for linear lr scheduling
+args.lr_decay_epochs = [int(step) for step in args.lr_decay_epochs.split(',')]
+
+
+if args.in_dataset == "ImageNet-100" or args.in_dataset == 'CIFAR-10':
+    args.name = (f"{date_time}_{args.loss}_{args.model}_lr_{args.learning_rate}_cosine_"
+        f"{args.cosine}_bsz_{args.batch_size}_head_{args.head}_wd_{args.w}_{args.epochs}_{args.feat_dim}_"
+        f"trial_{args.trial}_temp_{args.temp}_{args.in_dataset}_pm_{args.proto_m}")
+
+else:
+    args.name = (f"{date_time}_{args.loss}_std_{args.model}_lr_{args.learning_rate}_cosine_"
+        f"{args.cosine}_bsz_{args.batch_size}_td_{args.target_domain}_head_{args.head}_wd_{args.w}_{args.epochs}_{args.feat_dim}_"
+        f"trial_{args.trial}_temp_{args.temp}_{args.in_dataset}_pm_{args.proto_m}")
+
+args.log_directory = "logs/{in_dataset}/{name}/".format(in_dataset=args.in_dataset, name= args.name)
+
+args.model_directory = "/nobackup2/yf/checkpoints/hypo_cr/{in_dataset}/{name}/".format(in_dataset=args.in_dataset, name= args.name)
+
+
+args.tb_path = './save/hypo/{}_tensorboard'.format(args.in_dataset)
+if not os.path.exists(args.model_directory):
+    os.makedirs(args.model_directory)
+if not os.path.exists(args.log_directory):
+    os.makedirs(args.log_directory)
+args.tb_folder = os.path.join(args.tb_path, args.name)
+if not os.path.isdir(args.tb_folder):
+    os.makedirs(args.tb_folder)
+
+#save args
+with open(os.path.join(args.log_directory, 'train_args.txt'), 'w') as f:
+    f.write(pprint.pformat(state))
+
+#init log
+log = logging.getLogger(__name__)
+formatter = logging.Formatter('%(asctime)s : %(message)s')
+fileHandler = logging.FileHandler(os.path.join(args.log_directory, "train_info.log"), mode='w')
+fileHandler.setFormatter(formatter)
+streamHandler = logging.StreamHandler()
+streamHandler.setFormatter(formatter)
+log.setLevel(logging.DEBUG)
+log.addHandler(fileHandler)
+log.addHandler(streamHandler) 
+
+log.debug(state)
+
+if args.in_dataset == "CIFAR-10":
+    args.n_cls = 10
+elif args.in_dataset == "PACS":
+    args.n_cls = 7
+elif args.in_dataset == "VLCS":
+    args.n_cls = 5
+elif args.in_dataset == "OfficeHome":
+    args.n_cls = 65
+elif args.in_dataset == 'terra_incognita':
+    args.n_cls = 10
+elif args.in_dataset in ["CIFAR-100", "ImageNet-100"]:
+    args.n_cls = 100
+
+#set seeds
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
+np.random.seed(args.seed)
+log.debug(f"{args.name}")
+
+# warm-up for large-batch training
+if args.batch_size > 256:
+    args.warm = True
+if args.warm:
+    args.warmup_from = 0.001
+    args.warm_epochs = 10
+    if args.cosine:
+        eta_min = args.learning_rate * (args.lr_decay_rate ** 3)
+        args.warmup_to = eta_min + (args.learning_rate - eta_min) * (
+                1 + math.cos(math.pi * args.warm_epochs / args.epochs)) / 2
+    else:
+        args.warmup_to = args.learning_rate
+        
+def to_np(x): return x.data.cpu().numpy()
+
+def main():
+    tb_log = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
+
+    wandb.init(
+        # Set the project where this run will be logged
+        project="hypo",
+        # We pass a run name (otherwise it’ll be randomly assigned, like sunshine-lollypop-10)
+        name=args.name, 
+        # Track hyperparameters and run metadata
+        mode=args.mode,
+        config=args)
+
+    if args.in_dataset == "ImageNet-100":
+        train_loader, val_loader, test_loader = set_loader_ImageNet(args)
+    else:
+        if args.in_dataset == 'CIFAR-10' or args.in_dataset == 'CIFAR-100':
+            train_loader, val_loader, test_loader = set_loader_small(args)
+        else:
+            train_loader, val_loader, test_loader = set_loader_small(args)
+
+
+    model = set_model(args)
+
+    criterion_comp = CompLoss(args, temperature=args.temp, use_domain = args.use_domain).cuda()
+    criterion_dis = DisLoss(args, model, val_loader, temperature=args.temp).cuda()
+
+    optimizer = torch.optim.SGD(model.parameters(), lr = args.learning_rate,
+                                momentum=args.momentum,
+                                nesterov=True,
+                                weight_decay=args.weight_decay)
+
+    acc_best = 0.0
+    acc_best_id = 0.0
+    acc_test_best = 0.0
+    acc_test_best_id = 0.0
+    epoch_test_best = 0.0
+    epoch_val_best = 0.0
+    for epoch in range(args.start_epoch, args.epochs):
+        adjust_learning_rate(args, optimizer, epoch)
+        # train for one epoch
+        train_sloss, train_uloss, train_dloss, acc, acc_cor= train_hypo(args, train_loader, val_loader, test_loader, model, criterion_comp, criterion_dis, optimizer, epoch, log)
+
+        tb_log.log_value('train_uni_loss', train_uloss, epoch)
+        tb_log.log_value('train_dis_loss', train_dloss, epoch)
+        wandb.log({'Comp Loss Ep': train_uloss,'Dis Loss Ep': train_dloss })
+        tb_log.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
+        wandb.log({'current lr': optimizer.param_groups[0]['lr'], 'acc':acc, 'acc cor': acc_cor})
+        
+        # save checkpoint
+        if acc >= acc_best_id:
+            acc_best = acc_cor
+            acc_best_id = acc
+            epoch_val_best = epoch
+            wandb.log({'val best ood acc': acc_best, 'val best id acc':acc_best_id})
+            print('best accuracy {} at epoch {}'.format(acc_best_id, epoch))
+            print('accuracy cor {} at epoch {}'.format(acc_best, epoch))
+            save_checkpoint(args, {
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'opt_state_dict': optimizer.state_dict(),
+                'dis_state_dict': criterion_dis.state_dict(),
+                'uni_state_dict': criterion_comp.state_dict(),
+            }, epoch + 1, save_best=True)  
+
+        if acc_cor >= acc_test_best:
+            acc_test_best = acc_cor
+            acc_test_best_id = acc
+            epoch_test_best = epoch
+            wandb.log({'test best ood acc': acc_test_best, 'test best id acc':acc_test_best_id})
+            print('best test accuracy {} at epoch {}'.format(acc_test_best, epoch))
+
+    print('total val best ood accuracy {} id accuracy {} at epoch {}'.format(acc_best, acc_best_id, epoch_val_best))
+    print('total test best ood accuracy {} id accuracy {} at epoch {}'.format(acc_test_best, acc_test_best_id, epoch_test_best))
+    print('last epoch ood accuracy {} id accuracy {} at epoch {}'.format(acc_cor, acc, epoch))
+
+    summary_metrics = {
+        'val best ood accuracy': acc_best,
+        'val best id accuracy': acc_best_id,
+        'val best epoch': epoch_val_best,
+        'test best ood accuracy': acc_test_best,
+        'test best id accuracy': acc_test_best_id,
+        'test best epoch': epoch_test_best,
+        'last ood accuracy': acc_cor,
+        'last id accuracy': acc,
+        'last epoch': epoch
+    }
+
+    for metric_name, metric_value in summary_metrics.items():
+        wandb.summary[metric_name] = metric_value
+
+def train_hypo(args, train_loader, val_loader, test_loader, model, criterion_comp, criterion_dis, optimizer, epoch, log): 
+    """Train for one epoch on the training set"""
+    batch_time = AverageMeter()
+    supcon_losses = AverageMeter()
+    comp_losses = AverageMeter()
+    dis_losses = AverageMeter()
+    losses = AverageMeter()
+
+    model.train()
+    end = time.time()
+    for i, values in enumerate(train_loader):
+        if len(values) == 3:
+            input, target, domain = values
+        elif len(values) == 2:
+            input, target = values
+            domain = None 
+        
+        warmup_learning_rate(args, epoch, i, len(train_loader), optimizer)
+        bsz = target.shape[0]
+
+        input = input.cuda()
+        target = target.cuda()
+
+        penultimate = model.encoder(input).squeeze()
+
+        if args.normalize: # default: False 
+            penultimate= F.normalize(penultimate, dim=1)
+        features= model.head(penultimate)
+        features= F.normalize(features, dim=1)
+
+        dis_loss = criterion_dis(features, target) 
+        comp_loss = criterion_comp(features, criterion_dis.prototypes, target, None)
+
+        loss = args.w * comp_loss + dis_loss
+
+        dis_losses.update(dis_loss.data, input.size(0))
+        comp_losses.update(comp_loss.data, input.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+        if i % args.print_freq == 0: 
+
+            log.debug('Epoch: [{0}][{1}/{2}]\t'
+                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                'Dis Loss {dloss.val:.4f} ({dloss.avg:.4f})\t'
+                'Comp Loss {uloss.val:.4f} ({uloss.avg:.4f})\t'.format(
+                    epoch, i, len(train_loader), batch_time=batch_time, dloss=dis_losses, uloss = comp_losses))
+
+            wandb.log({'Dis Loss' : dis_losses.val, 'Comp Loss' :  comp_losses.val})
+
+
+    model.eval()
+    with torch.no_grad():
+        accuracies = []
+        for i, values in enumerate(val_loader):
+            if len(values) == 3:
+                input, target, domain = values
+            elif len(values) == 2:
+                input, target = values
+                domain = None 
+            input = input.cuda()
+            target = target.cuda()
+
+            features = model.forward(input)
+            feat_dot_prototype = torch.div(torch.matmul(features, criterion_dis.prototypes.T), args.temp)
+
+            # for numerical stability
+            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+            logits = feat_dot_prototype - logits_max.detach()
+
+            pred = logits.data.max(1)[1]
+
+            accuracies.append(accuracy_score(list(to_np(pred)), list(to_np(target))))
+
+    acc = sum(accuracies) / len(accuracies)
+
+    if test_loader is None:
+        acc_cor = 0.
+    else:
+        with torch.no_grad():
+            accuracies_cor = []
+            for i, values in enumerate(test_loader):
+                if len(values) == 3:
+                    input, target, domain = values
+                elif len(values) == 2:
+                    input, target = values
+                    domain = None 
+                input = input.cuda()
+                target = target.cuda()
+
+                features = model.forward(input)
+                feat_dot_prototype = torch.div(torch.matmul(features, criterion_dis.prototypes.T), args.temp)
+
+                # for numerical stability
+                logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+                logits = feat_dot_prototype - logits_max.detach()
+
+                pred = logits.data.max(1)[1]
+                accuracies_cor.append(accuracy_score(list(to_np(pred)), list(to_np(target))))
+
+        acc_cor = sum(accuracies_cor) / len(accuracies_cor)
+
+    # measure elapsed time
+    return supcon_losses.avg, comp_losses.avg, dis_losses.avg, acc, acc_cor
+
+
+
+def save_checkpoint(args, state, epoch, save_best = False):
+    """Saves checkpoint to disk"""
+    if save_best:
+        filename = args.model_directory + 'checkpoint_max.pth.tar'
+    else:
+        filename = args.model_directory + f'checkpoint_{epoch}.pth.tar'
+    torch.save(state, filename)
+
+
+if __name__ == '__main__':
+    main()
+
+File Path: utils/__init__.py
+Content:
+from __future__ import absolute_import
+
+from .losses import *
+
+from .util import *
+
+
+File Path: utils/display_results.py
+Content:
+import os
+import numpy as np
+import sklearn.metrics as sk
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+recall_level_default = 0.95
+
+
+def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
+    """Use high precision for cumsum and check that final value matches sum
+    Parameters
+    ----------
+    arr : array-like
+        To be cumulatively summed as flat
+    rtol : float
+        Relative tolerance, see ``np.allclose``
+    atol : float
+        Absolute tolerance, see ``np.allclose``
+    """
+    out = np.cumsum(arr, dtype=np.float64)
+    expected = np.sum(arr, dtype=np.float64)
+    if not np.allclose(out[-1], expected, rtol=rtol, atol=atol):
+        raise RuntimeError('cumsum was found to be unstable: '
+                           'its last element does not correspond to sum')
+    return out
+
+
+def fpr_and_fdr_at_recall(y_true, y_score, recall_level=recall_level_default, pos_label=None):
+    classes = np.unique(y_true)
+    if (pos_label is None and
+            not (np.array_equal(classes, [0, 1]) or
+                     np.array_equal(classes, [-1, 1]) or
+                     np.array_equal(classes, [0]) or
+                     np.array_equal(classes, [-1]) or
+                     np.array_equal(classes, [1]))):
+        raise ValueError("Data is not binary and pos_label is not specified")
+    elif pos_label is None:
+        pos_label = 1.
+
+    # make y_true a boolean vector
+    y_true = (y_true == pos_label)
+
+    # sort scores and corresponding truth values
+    desc_score_indices = np.argsort(y_score, kind="mergesort")[::-1]
+    y_score = y_score[desc_score_indices]
+    y_true = y_true[desc_score_indices]
+
+    # y_score typically has many tied values. Here we extract
+    # the indices associated with the distinct values. We also
+    # concatenate a value for the end of the curve.
+    distinct_value_indices = np.where(np.diff(y_score))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
+
+    # accumulate the true positives with decreasing threshold
+    tps = stable_cumsum(y_true)[threshold_idxs]
+    fps = 1 + threshold_idxs - tps      # add one because of zero-based indexing
+
+    thresholds = y_score[threshold_idxs]
+
+    recall = tps / tps[-1]
+
+    last_ind = tps.searchsorted(tps[-1])
+    sl = slice(last_ind, None, -1)      # [last_ind::-1]
+    recall, fps, tps, thresholds = np.r_[recall[sl], 1], np.r_[fps[sl], 0], np.r_[tps[sl], 0], thresholds[sl]
+
+    cutoff = np.argmin(np.abs(recall - recall_level))
+
+    return fps[cutoff] / (np.sum(np.logical_not(y_true)))   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
+
+
+def get_measures(_pos, _neg, recall_level=recall_level_default):
+    pos = np.array(_pos[:]).reshape((-1, 1))
+    neg = np.array(_neg[:]).reshape((-1, 1))
+    examples = np.squeeze(np.vstack((pos, neg)))
+    labels = np.zeros(len(examples), dtype=np.int32)
+    labels[:len(pos)] += 1
+
+    auroc = sk.roc_auc_score(labels, examples)
+    aupr = sk.average_precision_score(labels, examples)
+    fpr = fpr_and_fdr_at_recall(labels, examples, recall_level)
+
+    return auroc, aupr, fpr
+
+
+def show_performance(pos, neg, method_name='Ours', recall_level=recall_level_default):
+    '''
+    :param pos: 1's class, class to detect, outliers, or wrongly predicted
+    example scores
+    :param neg: 0's class scores
+    '''
+
+    auroc, aupr, fpr = get_measures(pos[:], neg[:], recall_level)
+
+    print(f'\t\t\t {method_name}')
+    print('FPR{:d}:\t\t\t{:.2f}'.format(int(100 * recall_level), 100 * fpr))
+    print('AUROC:\t\t\t{:.2f}'.format(100 * auroc))
+    print('AUPR:\t\t\t{:.2f}'.format(100 * aupr))
+
+def print_measures(log, auroc, aupr, fpr, method_name='Ours', recall_level=recall_level_default):
+    if log == None: 
+        print('FPR{:d}:\t\t\t{:.2f}'.format(int(100 * recall_level), 100 * fpr))
+        print('AUROC: \t\t\t{:.2f}'.format(100 * auroc))
+        print('AUPR:  \t\t\t{:.2f}'.format(100 * aupr))
+    else:
+        log.debug('\t\t\t\t' + method_name)
+        log.debug('  FPR{:d} AUROC AUPR'.format(int(100*recall_level)))
+        log.debug('& {:.2f} & {:.2f} & {:.2f}'.format(100*fpr, 100*auroc, 100*aupr))
+
+
+def print_measures_with_std(log, aurocs, auprs, fprs, method_name='Ours', recall_level=recall_level_default):
+    if log: 
+        log.debug('\t\t\t\t' + method_name)
+        log.debug('  FPR{:d} AUROC AUPR'.format(int(100*recall_level)))
+        log.debug('& {:.2f} & {:.2f} & {:.2f}'.format(100*np.mean(fprs), 100*np.mean(aurocs), 100*np.mean(auprs)))
+        log.debug('& {:.2f} & {:.2f} & {:.2f}'.format(100*np.std(fprs), 100*np.std(aurocs), 100*np.std(auprs)))
+    else:
+        print('FPR{:d}:\t\t\t{:.2f}\t+/- {:.2f}'.format(int(100 * recall_level), 100 * np.mean(fprs), 100 * np.std(fprs)))
+        print('AUROC: \t\t\t{:.2f}\t+/- {:.2f}'.format(100 * np.mean(aurocs), 100 * np.std(aurocs)))
+        print('AUPR:  \t\t\t{:.2f}\t+/- {:.2f}'.format(100 * np.mean(auprs), 100 * np.std(auprs)))
+
+def plot_distribution(args, id_scores, ood_scores, out_dataset):
+    sns.set(style="white", palette="muted")
+    palette = ['#A8BAE3', '#55AB83']
+    sns.displot({"ID": -1 * id_scores, "OOD":  -1 * ood_scores}, label="id", kind = "kde", palette=palette, fill = True, alpha = 0.8)
+    plt.savefig(os.path.join(args.log_directory,f"KNN_{out_dataset}.png"), bbox_inches='tight')
+
+def save_as_dataframe(args, out_datasets, fpr_list, auroc_list, aupr_list):
+    fpr_list = [float('{:.2f}'.format(100*fpr)) for fpr in fpr_list]
+    auroc_list = [float('{:.2f}'.format(100*auroc)) for auroc in auroc_list]
+    aupr_list = [float('{:.2f}'.format(100*aupr)) for aupr in aupr_list]
+    import pandas as pd
+    data = {k:v for k,v in zip(out_datasets, zip(fpr_list,auroc_list,aupr_list))}
+    data['AVG'] = [np.mean(fpr_list),np.mean(auroc_list),np.mean(aupr_list) ]
+    data['AVG']  = [float('{:.2f}'.format(metric)) for metric in data['AVG']]
+    # Specify orient='index' to create the DataFrame using dictionary keys as rows
+    df = pd.DataFrame.from_dict(data, orient='index',
+                       columns=['FPR95', 'AUROC', 'AUPR'])
+    df.to_csv(os.path.join(args.log_directory,f'{args.name}.csv'))
+    
+def show_performance_comparison(pos_base, neg_base, pos_ours, neg_ours, baseline_name='Baseline',
+                                method_name='Ours', recall_level=recall_level_default):
+    '''
+    :param pos_base: 1's class, class to detect, outliers, or wrongly predicted
+    example scores from the baseline
+    :param neg_base: 0's class scores generated by the baseline
+    '''
+    auroc_base, aupr_base, fpr_base = get_measures(pos_base[:], neg_base[:], recall_level)
+    auroc_ours, aupr_ours, fpr_ours = get_measures(pos_ours[:], neg_ours[:], recall_level)
+
+    print('\t\t\t' + baseline_name + '\t' + method_name)
+    print('FPR{:d}:\t\t\t{:.2f}\t\t{:.2f}'.format(
+        int(100 * recall_level), 100 * fpr_base, 100 * fpr_ours))
+    print('AUROC:\t\t\t{:.2f}\t\t{:.2f}'.format(
+        100 * auroc_base, 100 * auroc_ours))
+    print('AUPR:\t\t\t{:.2f}\t\t{:.2f}'.format(
+        100 * aupr_base, 100 * aupr_ours))
+File Path: utils/losses.py
+Content:
+
+"""
+Aapted from SupCon: https://github.com/HobbitLong/SupContrast/
+"""
+from __future__ import print_function
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import time
+
+def binarize(T, nb_classes):
+    T = T.cpu().numpy()
+    import sklearn.preprocessing
+    T = sklearn.preprocessing.label_binarize(
+        T, classes = range(0, nb_classes)
+    )
+    T = torch.FloatTensor(T).cuda()
+    return T
+
+def l2_norm(input):
+    input_size = input.size()
+    buffer = torch.pow(input, 2)
+    normp = torch.sum(buffer, 1).add_(1e-12)
+    norm = torch.sqrt(normp)
+    _output = torch.div(input, norm.view(-1, 1).expand_as(input))
+    output = _output.view(input_size)
+    return output
+
+
+class Proxy_Anchor(torch.nn.Module):
+    def __init__(self, nb_classes, sz_embed, mrg = 0.1, alpha = 32):
+        torch.nn.Module.__init__(self)
+        # Proxy Anchor Initialization
+        self.proxies = torch.nn.Parameter(torch.randn(nb_classes, sz_embed).cuda())
+        nn.init.kaiming_normal_(self.proxies, mode='fan_out')
+
+        self.nb_classes = nb_classes
+        self.sz_embed = sz_embed
+        self.mrg = mrg
+        self.alpha = alpha
+        
+    def forward(self, X, T):
+        P = self.proxies
+
+        cos = F.linear(l2_norm(X), l2_norm(P))  # Calcluate cosine similarity
+        P_one_hot = binarize(T = T, nb_classes = self.nb_classes)
+        N_one_hot = 1 - P_one_hot
+    
+        pos_exp = torch.exp(-self.alpha * (cos - self.mrg))
+        neg_exp = torch.exp(self.alpha * (cos + self.mrg))
+
+        with_pos_proxies = torch.nonzero(P_one_hot.sum(dim = 0) != 0).squeeze(dim = 1)   # The set of positive proxies of data in the batch
+        num_valid_proxies = len(with_pos_proxies)   # The number of positive proxies
+        
+        P_sim_sum = torch.where(P_one_hot == 1, pos_exp, torch.zeros_like(pos_exp)).sum(dim=0) 
+        N_sim_sum = torch.where(N_one_hot == 1, neg_exp, torch.zeros_like(neg_exp)).sum(dim=0)
+        
+        pos_term = torch.log(1 + P_sim_sum).sum() / num_valid_proxies
+        neg_term = torch.log(1 + N_sim_sum).sum() / self.nb_classes
+        loss = pos_term + neg_term     
+        
+        return loss
+
+
+class CompLoss(nn.Module):
+    '''
+    Compactness Loss with class-conditional prototypes
+    '''
+    def __init__(self, args, temperature=0.07, base_temperature=0.07, use_domain = False):
+        super(CompLoss, self).__init__()
+        self.args = args
+        self.temperature = temperature
+        self.base_temperature = base_temperature
+        self.use_domain = use_domain
+
+    def forward(self, features, prototypes, labels, domains):
+
+        prototypes = F.normalize(prototypes, dim=1) 
+        proxy_labels = torch.arange(0, self.args.n_cls).cuda()
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, proxy_labels.T).float().cuda() #bz, cls
+
+        # compute logits
+        feat_dot_prototype = torch.div(
+            torch.matmul(features, prototypes.T),
+            self.temperature)
+        if self.use_domain:
+            domains = domains.contiguous().view(-1, 1)
+            label_mask = torch.eq(labels, labels.T).float().cuda() #bz, bz
+            neg_label_mask = 1 - label_mask
+            domain_mask = torch.eq(domains, domains.T).float().cuda() #bz, bz
+            feat_dot_feat = torch.div(
+                torch.matmul(features, features.T),
+                self.temperature)
+
+            # for numerical stability  
+            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+            feat_logits_max, _ = torch.max(feat_dot_feat, dim=1, keepdim=True)
+            logits_max = torch.max(feat_logits_max, feat_logits_max)
+
+            prot_logits = feat_dot_prototype - logits_max.detach()
+            feat_logits = feat_dot_feat - logits_max.detach()
+
+            exp_prot_logits = torch.exp(prot_logits) 
+            exp_feat_logits = torch.exp(feat_logits) 
+
+            pos_part = (prot_logits * mask).sum(1, keepdim=True) # (bz, 1)
+
+            prot_neg_pairs = exp_prot_logits.sum(1, keepdim=True)
+            same_domain_neg_pairs = (neg_label_mask * domain_mask * exp_feat_logits).sum(1, keepdim=True) 
+            neg_part = torch.log(prot_neg_pairs + same_domain_neg_pairs) # (bz, 1)
+
+            loss = - (self.temperature / self.base_temperature) *(pos_part - neg_part).mean()
+
+        else: 
+            # for numerical stability
+            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)
+            logits = feat_dot_prototype - logits_max.detach()
+
+            # compute log_prob
+            exp_logits = torch.exp(logits) 
+            log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+
+            # compute mean of log-likelihood over positive
+            mean_log_prob_pos = (mask * log_prob).sum(1) 
+
+            # loss
+            loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos.mean()
+        return loss
+
+
+class CompNGLoss(nn.Module):
+    '''
+    Compactness Loss with class-conditional prototypes (without negative pairs)
+    '''
+    def __init__(self, args, temperature=0.1, base_temperature=0.1):
+        super(CompNGLoss, self).__init__()
+        self.args = args
+        self.temperature = temperature
+        self.base_temperature = base_temperature
+
+    def forward(self, features, prototypes, labels):
+        prototypes = F.normalize(prototypes, dim=1) 
+        proxy_labels = torch.arange(0, self.args.n_cls).cuda()
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, proxy_labels.T).float().cuda() #bz, cls
+        # compute logits
+        feat_dot_prototype = torch.div(
+            torch.matmul(features, prototypes.T),
+            self.temperature)
+
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * feat_dot_prototype).sum(1) 
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos.mean()
+        return loss
+
+class DisLPLoss(nn.Module):
+    '''
+    Dispersion Loss with learnable prototypes
+    '''
+    def __init__(self, args, model, loader, temperature= 0.1, base_temperature=0.1):
+        super(DisLPLoss, self).__init__()
+        self.args = args
+        self.temperature = temperature
+        self.base_temperature = base_temperature
+        self.model = model
+        self.loader = loader
+        self.init_class_prototypes()
+
+    def compute(self):
+        num_cls = self.args.n_cls
+        # l2-normalize the prototypes if not normalized
+        prototypes = F.normalize(self.prototypes, dim=1) 
+
+        labels = torch.arange(0, num_cls).cuda()
+        labels = labels.contiguous().view(-1, 1)
+
+        mask = (1- torch.eq(labels, labels.T).float()).cuda()
+
+        logits = torch.div(
+            torch.matmul(prototypes, prototypes.T),
+            self.temperature)
+
+        mean_prob_neg = torch.log((mask * torch.exp(logits)).sum(1) / mask.sum(1))
+        mean_prob_neg = mean_prob_neg[~torch.isnan(mean_prob_neg)]
+        # loss
+        loss = self.temperature / self.base_temperature * mean_prob_neg.mean()
+
+        return loss
+    
+    def init_class_prototypes(self):
+        """Initialize class prototypes"""
+        self.model.eval()
+        start = time.time()
+        prototype_counts = [0]*self.args.n_cls
+        with torch.no_grad():
+            prototypes = torch.zeros(self.args.n_cls,self.args.feat_dim).cuda()
+            #for input, target in self.loader:
+            for i, (input, target, domain) in enumerate(self.loader):
+                input, target = input.cuda(), target.cuda()
+                features = self.model(input) # extract normalized features
+                for j, feature in enumerate(features):
+                    prototypes[target[j].item()] += feature
+                    prototype_counts[target[j].item()] += 1
+            for cls in range(self.args.n_cls):
+                prototypes[cls] /=  prototype_counts[cls] 
+            # measure elapsed time
+            duration = time.time() - start
+            print(f'Time to initialize prototypes: {duration:.3f}')
+            prototypes = F.normalize(prototypes, dim=1)
+            self.prototypes = torch.nn.Parameter(prototypes)
+
+class DisLoss(nn.Module):
+    '''
+    Dispersion Loss with EMA prototypes
+    '''
+    def __init__(self, args, model, loader, temperature= 0.1, base_temperature=0.1):
+        super(DisLoss, self).__init__()
+        self.args = args
+        self.temperature = temperature
+        self.base_temperature = base_temperature
+        self.register_buffer("prototypes", torch.zeros(self.args.n_cls,self.args.feat_dim))
+        self.model = model
+        self.loader = loader
+        self.init_class_prototypes()
+
+    def forward(self, features, labels):    
+
+        prototypes = self.prototypes
+        num_cls = self.args.n_cls
+        for j in range(len(features)):
+            prototypes[labels[j].item()] = F.normalize(prototypes[labels[j].item()] *self.args.proto_m + features[j]*(1-self.args.proto_m), dim=0)
+        self.prototypes = prototypes.detach()
+        labels = torch.arange(0, num_cls).cuda()
+        labels = labels.contiguous().view(-1, 1)
+
+        mask = (1- torch.eq(labels, labels.T).float()).cuda()
+
+        logits = torch.div(
+            torch.matmul(prototypes, prototypes.T),
+            self.temperature)
+
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(num_cls).view(-1, 1).cuda(),
+            0
+        )
+        mask = mask * logits_mask
+        mean_prob_neg = torch.log((mask * torch.exp(logits)).sum(1) / mask.sum(1))
+        mean_prob_neg = mean_prob_neg[~torch.isnan(mean_prob_neg)]
+        loss = self.temperature / self.base_temperature * mean_prob_neg.mean()
+        return loss
+
+    def init_class_prototypes(self):
+        """Initialize class prototypes"""
+        self.model.eval()
+        start = time.time()
+        prototype_counts = [0]*self.args.n_cls
+        with torch.no_grad():
+            prototypes = torch.zeros(self.args.n_cls,self.args.feat_dim).cuda()
+            for i, values in enumerate(self.loader):
+                if len(values) == 3:
+                    input, target, domain = values
+                elif len(values) == 2:
+                    input, target = values
+                    domain = None 
+                input, target = input.cuda(), target.cuda()
+                features = self.model(input)
+                for j, feature in enumerate(features):
+                    prototypes[target[j].item()] += feature
+                    prototype_counts[target[j].item()] += 1
+            for cls in range(self.args.n_cls):
+                prototypes[cls] /=  prototype_counts[cls] 
+            # measure elapsed time
+            duration = time.time() - start
+            print(f'Time to initialize prototypes: {duration:.3f}')
+            prototypes = F.normalize(prototypes, dim=1)
+            self.prototypes = prototypes
+
+File Path: utils/measure_distances.py
+Content:
+import scipy.io as io        
+import numpy as np
+import ot
+from itertools import combinations
+import torch
+from geomloss import SamplesLoss
+import matplotlib.pyplot as plt
+
+
+def compute_wasserstein_distance(X1, X2, metric = 'euclidean', reg=1e-2):
+    '''
+    numerically unstable with OT library
+    '''
+    # Calculate the cost matrix, which is the pairwise Euclidean distance
+    cost_matrix = ot.dist(X1, X2, metric=metric)
+
+    # Compute the empirical distribution weights, assuming all samples have equal probability
+    n1_samples, n2_samples  = X1.shape[0], X2.shape[0]
+    weights_x1 = np.ones(n1_samples) / n2_samples
+    weights_x2 = np.ones(n2_samples) / n2_samples
+
+    # Compute the Wasserstein distance using the Sinkhorn algorithm
+    wasserstein_distance = ot.sinkhorn2(weights_x1, weights_x2, cost_matrix, reg=reg, stopThr=1e-8)
+    
+    return wasserstein_distance
+
+
+def compute_wasserstein_distance2(X1, X2, p=2, reg=0.01):
+    # https://www.kernel-operations.io/geomloss/api/pytorch-api.html
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    X1_torch = torch.tensor(X1, dtype=torch.float32, device=device)
+    X2_torch = torch.tensor(X2, dtype=torch.float32, device=device)
+
+    # Initialize the SamplesLoss function with the Wasserstein distance (p=2)
+    # loss="sinkhorn"： (Un-biased) Sinkhorn divergence, which interpolates between Wasserstein (blur=0) and kernel (blur= 
+    #) distances.
+    loss = SamplesLoss(loss="sinkhorn", p=p, blur=reg)
+
+    # Compute the Wasserstein distance
+    wd = loss(X1_torch, X2_torch)
+
+    # Convert the result to a scalar value
+    wd_scalar = wd.item()
+    return wd_scalar
+
+
+def plot_heatmap(data, save_name):
+    # Find the maximum values of y and e
+    max_y = max(data.keys())
+    # max_e = max(max(pair for pair in data[y].keys()) for y in data.keys()) #e.g. (2,3)
+
+    unique_pairs = list(data[0].keys())
+    print(unique_pairs)
+    # Initialize an empty matrix to store the data
+    matrix = np.zeros((max_y + 1, len(unique_pairs)))
+
+    for y, pairs in data.items():
+        for (e1, e2), value in pairs.items():
+            pair_index = unique_pairs.index((e1, e2))
+            matrix[y, pair_index] = value
+
+    # Plot the heatmap using plt.imshow
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    im = ax.imshow(matrix, interpolation="nearest", aspect="auto")
+    ax.set_xlabel("(e1, e2)", fontsize=14)
+    ax.set_xticks(range(len(unique_pairs)), unique_pairs, rotation=45, fontsize=12)
+    ax.set_ylabel("y", fontsize=14)
+    ax.tick_params(axis='y', labelsize=12) # y tickle size
+
+    # Add numbers to each block of the heatmap
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            value = matrix[i, j]
+            ax.text(j, i, f"{value:.2f}", ha="center", va="center", color="w", fontsize=10)
+
+    plt.tight_layout()
+    fig.colorbar(im, ax=ax, label="Wasserstein distance (sinkhorn divergence)")
+    plt.title("")
+    plt.tight_layout()
+    plt.savefig(f'plots/{save_name}.png', dpi = 300,bbox_inches='tight')
+
+
+if __name__ == '__main__': 
+    # classwise
+    normalize = True 
+    for loss in ['ce', 'cider']:
+        for normalize in ['no_norm', 'norm']:
+            save_name = f'feature_y_e_{loss}_penultimate_{normalize}'
+            res = {}
+            feature_y_e=io.loadmat(f'features/{save_name}.mat')
+            all_features = feature_y_e['feature']
+            all_y = feature_y_e['y'].squeeze()
+            all_e = feature_y_e['e'].squeeze()
+            unique_y = np.unique(all_y)
+            unique_e = np.unique(all_e)
+            unique_e_pairs = list(combinations(unique_e, 2))
+            for y in unique_y:
+                res[y] = {}
+                for (e1, e2) in unique_e_pairs:
+                    feat_1 = all_features[(all_y == y) & (all_e == e1)] # element-wise & (bitwise AND) operator to combine the boolean arrays; Remember to use parentheses around each condition since the & operator has higher precedence.
+                    feat_2 = all_features[(all_y==y) & (all_e == e2)]
+                    # print(feat_1.shape, feat_2.shape)
+                    # wd = compute_wasserstein_distance2(feat_1.astype('float64'), feat_2.astype('float64'))
+                    wd = compute_wasserstein_distance2(feat_1, feat_2)
+                    print(f'y = {y}, estimated W-dist for ({e1}, {e2}) is {wd}')
+                    res[y][(e1,e2)] = wd
+            
+            print(res)
+            # debug test
+            # data = {0: {(0, 1): 0.15530866384506226, (0, 2): 0.21642754971981049, (0, 3): 0.23963293433189392, (1, 2): 0.20890945196151733, (1, 3): 0.26223963499069214, (2, 3): 0.2195998877286911}, 1: {(0, 1): 0.14590714871883392, (0, 2): 0.23728705942630768, (0, 3): 0.28713685274124146, (1, 2): 0.23684373497962952, (1, 3): 0.3055537939071655, (2, 3): 0.20455986261367798}, 2: {(0, 1): 0.15946874022483826, (0, 2): 0.1995120495557785, (0, 3): 0.1753748506307602, (1, 2): 0.20574313402175903, (1, 3): 0.2013503611087799, (2, 3): 0.17896652221679688}, 3: {(0, 1): 0.13759663701057434, (0, 2): 0.18846842646598816, (0, 3): 0.1469249725341797, (1, 2): 0.15395350754261017, (1, 3): 0.093973807990551, (2, 3): 0.12456567585468292}, 4: {(0, 1): 0.16651654243469238, (0, 2): 0.23089328408241272, (0, 3): 0.2536894679069519, (1, 2): 0.22801926732063293, (1, 3): 0.2667630910873413, (2, 3): 0.23195475339889526}, 5: {(0, 1): 0.10270039737224579, (0, 2): 0.20019754767417908, (0, 3): 0.16466757655143738, (1, 2): 0.1986047923564911, (1, 3): 0.16104549169540405, (2, 3): 0.17241033911705017}, 6: {(0, 1): 0.2291284203529358, (0, 2): 0.24648775160312653, (0, 3): 0.24859079718589783, (1, 2): 0.2752886712551117, (1, 3): 0.3062085807323456, (2, 3): 0.25627970695495605}}
+            plot_heatmap(res,save_name)
+File Path: utils/modify_file_path.py
+Content:
+ORIGINAL_ROOT_DIR = '/nobackup/hybai/datasets/Generalization/PACS'
+NEW_ROOT_DIR = 'datasets'
+
+domains = ['art_painting', 'cartoon', 'photo', 'sketch']
+for domain in domains:
+    input_file = f"{NEW_ROOT_DIR}/pacs_data/{domain}.txt"
+    output_file = f"{NEW_ROOT_DIR}/pacs_data/{domain}.txt"
+    with open(input_file, "r") as f:
+        lines = f.readlines()
+    updated_lines = [line.replace(ORIGINAL_ROOT_DIR, NEW_ROOT_DIR) for line in lines]
+    with open(output_file, "w") as f:
+        f.writelines(updated_lines)
+
+File Path: utils/plot_3dsphere.py
+Content:
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+# Plot unit sphere with sparser gridlines
+phi = np.linspace(0, np.pi, 30)  # Reduced from 100 to 50 for sparser gridlines
+theta = np.linspace(0, 2 * np.pi, 30)  # Reduced from 100 to 50 for sparser gridlines
+phi, theta = np.meshgrid(phi, theta)
+
+x = np.sin(phi) * np.cos(theta)
+y = np.sin(phi) * np.sin(theta)
+z = np.cos(phi)
+
+ax.plot_surface(x, y, z, color='c', alpha=0.1, linewidth=0, antialiased=False)
+
+# Set axis labels
+ax.set_xlabel('X-axis', fontsize=12, labelpad=10)
+ax.set_ylabel('Y-axis', fontsize=12, labelpad=10)
+ax.set_zlabel('Z-axis', fontsize=12, labelpad=10)
+
+# Customize grid and background
+ax.xaxis.pane.fill = False
+ax.yaxis.pane.fill = False
+ax.zaxis.pane.fill = False
+ax.xaxis.pane.set_edgecolor('gray')
+ax.yaxis.pane.set_edgecolor('gray')
+ax.zaxis.pane.set_edgecolor('gray')
+ax.grid(color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+# Disable the X, Y, Z axes
+ax.set_axis_off()
+
+# Set the background transparent
+fig.patch.set_alpha(0)
+ax.patch.set_alpha(0)
+
+# Save and show the plot with transparent background
+plt.savefig('3d_plot_unit_sphere_no_title_sparser_grid_transparent_background.png', dpi=300, bbox_inches='tight', transparent=True)
+
+
+File Path: utils/util.py
+Content:
+from __future__ import print_function
+
+import math
+import os
+
+from torch import nn
+from models.resnet import SupCEHeadResNet
+
+
+import numpy as np
+import torch
+import torch.optim as optim
+import torch.nn.functional as F
+from torchvision import datasets, transforms
+import torchvision.transforms as transforms
+
+class TwoCropTransform:
+    """Create two crops of the same image"""
+    def __init__(self, transform):
+        self.transform = transform
+
+    def __call__(self, x):
+        return [self.transform(x), self.transform(x)]
+
+class TwoCrop:
+    def __init__(self):
+        self.transform = 0
+    def __call__(self, x):
+        return [x, x]
+
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def accuracy(output, labels, topk=(1, 5)):
+    """Computes the top-k accuracy for a given set of model outputs and labels.
+    
+    Args:
+        output (torch.Tensor): The model outputs, with shape (batch_size, num_classes).
+        labels (torch.Tensor): The true labels, with shape (batch_size,).
+        topk (tuple, optional): The top-k values for which to compute the accuracy. Default is (1, 5).
+    
+    Returns:
+        list: A list of the top-k accuracies.
+    """
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = labels.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(labels.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size).item())
+        return res
+
+def adjust_learning_rate(args, optimizer, epoch):
+    lr = args.learning_rate
+    if args.cosine:
+        eta_min = lr * (args.lr_decay_rate ** 3)
+        lr = eta_min + (lr - eta_min) * (
+                1 + math.cos(math.pi * epoch / args.epochs)) / 2
+    else:
+        steps = np.sum(epoch > np.asarray(args.lr_decay_epochs))
+        if steps > 0:
+            lr = lr * (args.lr_decay_rate ** steps)
+
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+def warmup_learning_rate(args, epoch, batch_id, total_batches, optimizer):
+    if args.warm and epoch <= args.warm_epochs:
+        p = (batch_id + (epoch - 1) * total_batches) / \
+            (args.warm_epochs * total_batches)
+        lr = args.warmup_from + p * (args.warmup_to - args.warmup_from)
+
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+
+
+def set_optimizer(opt, model):
+    optimizer = optim.SGD(model.parameters(),
+                          lr=opt.learning_rate,
+                          momentum=opt.momentum,
+                          weight_decay=opt.weight_decay)
+    return optimizer
+
+def set_loader_small(args, eval = False, batch_size = None, img_size = 32):
+    root = args.id_loc
+    if batch_size is None:
+        batch_size = args.batch_size
+    normalize = transforms.Normalize(mean=[x/255.0 for x in [125.3, 123.0, 113.9]],
+                                         std=[x/255.0 for x in [63.0, 62.1, 66.7]])
+    # data augmentations for supcon                                     
+    train_transform_supcon = transforms.Compose([
+        transforms.RandomResizedCrop(size=img_size, scale=(0.2, 1.)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomApply([
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        ], p=0.8),
+        transforms.RandomGrayscale(p=0.2),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        normalize
+        ])
+
+    kwargs = {'num_workers': 4, 'pin_memory': True}
+    if args.in_dataset == "CIFAR-10":
+        # Data loading code
+        if eval: 
+            dataset = datasets.CIFAR10(root, train=True, download=True, transform=transform_test)
+            if args.subset: 
+                dataset = torch.utils.data.Subset(dataset , np.random.choice(len(dataset), 20000, replace=False))
+            train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, **kwargs)
+        else:
+            train_data = datasets.CIFAR10(root, train=True, download=True,
+                            transform=train_transform_supcon)
+
+            train_loader = torch.utils.data.DataLoader(
+                    train_data,
+                    batch_size=args.batch_size, shuffle=True, **kwargs)          
+
+    
+        val_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10(root, train=False, transform=transform_test),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
+        test_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10(root, train=False, transform=transform_test),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
+    elif args.in_dataset == "CIFAR-100":
+        # Data loading code
+        if eval: 
+            dataset = datasets.CIFAR100(root, train=True, download=True, transform=transform_test)
+            if args.subset: 
+                dataset = torch.utils.data.Subset(dataset , np.random.choice(len(dataset), 20000, replace=False))
+            train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, **kwargs)
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                    datasets.CIFAR100(root, train=True, download=True,
+                             transform=train_transform_supcon),
+                    batch_size=args.batch_size, shuffle=True, **kwargs)
+        val_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR100(root, train=False, transform=transform_test),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
+        test_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR100(root, train=False, transform=transform_test),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
+
+    elif args.in_dataset == "ImageNet-100":
+        traindir = os.path.join('./ImageNet-100', 'train')
+        valdir = os.path.join('./ImageNet-100', 'val')
+
+        mean = [0.485, 0.456, 0.406]
+        std=[0.229, 0.224, 0.225]
+
+        train_data = datasets.ImageFolder(
+            traindir,
+            TwoCropTransform(transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]))
+            )
+
+        val_data = datasets.ImageFolder(
+            valdir,
+            transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]))      
+
+        from dataloader.corimagenetLoader import CorIMAGENETDataset as Dataset
+        test_data = Dataset('test', cortype)
+
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    elif args.in_dataset == "PACS":
+        print('loading PACS')
+        from dataloader.PACSLoader import PACSDataset as Dataset
+
+        train_data = Dataset('train', args.target_domain)
+        val_data = Dataset('val', args.target_domain)
+        test_data = Dataset('test', args.target_domain)
+   
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, pin_memory=True, drop_last=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    elif args.in_dataset == "OfficeHome":
+        print('loading OfficeHome')
+        from dataloader.OfficeHomeLoader import OfficeHomeDataset as Dataset
+
+        train_data = Dataset('train', args.target_domain)
+        val_data = Dataset('val', args.target_domain)
+        test_data = Dataset('test', args.target_domain)
+
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    elif args.in_dataset == "VLCS":
+        print('loading VLCS')
+        from dataloader.VLCSLoader import VLCSDataset as Dataset
+
+        train_data = Dataset('train', args.target_domain)
+        val_data = Dataset('val', args.target_domain)
+        test_data = Dataset('test', args.target_domain)
+
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    elif args.in_dataset == "terra_incognita":
+        print('loading terra incognita')
+        from dataloader.TerraLoader import TerraDataset as Dataset
+
+        train_data = Dataset('train', args.target_domain)
+        val_data = Dataset('val', args.target_domain)
+        test_data = Dataset('test', args.target_domain)
+
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    return train_loader, val_loader, test_loader
+
+def set_loader_ImageNet(args, eval = False, batch_size = None):
+    #root = args.id_loc
+    root = './ImageNet-100'
+    if batch_size is None:
+        batch_size = args.batch_size
+    # for ImageNet
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+
+    train_transform_supcon = transforms.Compose([
+        transforms.RandomResizedCrop(size=224, scale=(0.4, 1.)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomApply([
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        ], p=0.8),
+        transforms.RandomGrayscale(p=0.2),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    transform_test = transforms.Compose([
+        transforms.Resize(224),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize
+        ])
+    kwargs = {'num_workers': 4, 'pin_memory': True}
+    if batch_size is not None:
+        args.batch_size = batch_size
+
+    # Data loading code
+    if eval: 
+        dataset = datasets.ImageFolder(os.path.join(root, 'train'), transform=transform_test)
+        if args.subset: 
+            dataset = torch.utils.data.Subset(dataset , np.random.choice(len(dataset), 20000, replace=False))
+        train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, **kwargs)
+    else:
+        dataset = datasets.ImageFolder(os.path.join(root, 'train'),
+                    transform=train_transform_supcon)
+        train_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=args.batch_size, shuffle=True, **kwargs)
+    val_loader = torch.utils.data.DataLoader(
+        datasets.ImageFolder(os.path.join(root, 'val'),transform=transform_test),
+        batch_size=args.batch_size, shuffle=False, **kwargs)
+
+    from dataloader.corimagenetLoader import CorIMAGENETDataset as Dataset
+    cortype='gaussian_noise'
+    test_data = Dataset('test', cortype)
+    test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, pin_memory=True)
+
+    return train_loader, val_loader, test_loader
+
+
+def set_model(args):
+    
+    # create model
+    model = SupCEHeadResNet(args)
+    # get the number of model parameters
+    print('Number of model parameters: {}'.format(
+        sum([p.data.nelement() for p in model.parameters()])))
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+    model = model.cuda()
+
+
+    return model
+
+def sample_estimator(model, classifier, num_classes, feature_list, train_loader):
+    """
+    compute sample mean and precision (inverse of covariance)
+    return: sample_class_mean: list of class mean
+             precision: list of precisions
+    """
+    import sklearn.covariance
+
+    model.eval()
+    group_lasso = sklearn.covariance.EmpiricalCovariance(assume_centered=False)
+    correct, total = 0, 0
+    num_output = len(feature_list)
+    num_sample_per_class = np.empty(num_classes)
+    num_sample_per_class.fill(0)
+    list_features = []
+    for i in range(num_output):
+        temp_list = []
+        for j in range(num_classes):
+            temp_list.append(0)
+        list_features.append(temp_list)
+
+    for data, target in train_loader:
+        total += data.size(0)
+        data = data.cuda()
+        penultimate, out_features = model.encoder.feature_list(data)
+        output = classifier(penultimate)
+        # output, out_features = model.module.feature_list(data)
+
+        # get hidden features
+        for i in range(num_output):
+            out_features[i] = out_features[i].view(out_features[i].size(0), out_features[i].size(1), -1)
+            out_features[i] = torch.mean(out_features[i].data, 2)
+        #TEMP
+        # out_features[-1] = out_features[i] / out_features[i].norm(p=2, dim=1, keepdim=True)
+        out_features[-1] = F.normalize(out_features[-1], dim=1)
+        # compute the accuracy
+        pred = output.data.max(1)[1]
+        equal_flag = pred.eq(target.cuda()).cpu()
+        correct += equal_flag.sum()
+
+        # construct the sample matrix
+        for i in range(data.size(0)):
+            label = target[i]
+            if num_sample_per_class[label] == 0:
+                out_count = 0
+                for out in out_features:
+                    list_features[out_count][label] = out[i].view(1, -1)
+                    out_count += 1
+            else:
+                out_count = 0
+                for out in out_features:
+                    list_features[out_count][label] \
+                    = torch.cat((list_features[out_count][label], out[i].view(1, -1)), 0)
+                    out_count += 1
+            num_sample_per_class[label] += 1
+
+    sample_class_mean = []
+    out_count = 0
+    for num_feature in feature_list:
+        temp_list = torch.Tensor(num_classes, int(num_feature)).cuda()
+        for j in range(num_classes):
+            temp_list[j] = torch.mean(list_features[out_count][j], 0)
+        sample_class_mean.append(temp_list)
+        out_count += 1
+
+    precision = []
+    for k in range(num_output):
+        X = 0
+        for i in range(num_classes):
+            if i == 0:
+                X = list_features[k][i] - sample_class_mean[k][i]
+            else:
+                X = torch.cat((X, list_features[k][i] - sample_class_mean[k][i]), 0)
+
+        # find inverse
+        group_lasso.fit(X.cpu().numpy())
+        temp_precision = group_lasso.precision_
+        temp_precision = torch.from_numpy(temp_precision).float().cuda()
+        precision.append(temp_precision)
+
+    print('\n Training Accuracy:({:.2f}%)\n'.format(100. * correct / total))
+
+    return sample_class_mean, precision
+
+
+def estimate_dataset_mean_std(name = 'cifar10'):
+    data = datasets.CIFAR10(root='./datasets/cifar10', train=True, download=True,
+                    transform=transforms.ToTensor()).data
+    data = data.astype(np.float32)/255.
+
+    means = []
+    stdevs = []
+    for i in range(3):
+        pixels = data[:,:,:,i].ravel()
+        means.append(np.mean(pixels))
+        stdevs.append(np.std(pixels))
+
+    print("means: {}".format(means))
+    print("stdevs: {}".format(stdevs))
+    print('transforms.Normalize(mean = {}, std = {})'.format(means, stdevs))
+
+if __name__ == '__main__':
+    estimate_dataset_mean_std()
+
+Output:
+{
+    "experimental_code": "File Path: models/resnet.py\nContent:\nclass SupCEHeadResNet(nn.Module):\n    \"\"\"encoder + head\"\"\"\n    def __init__(self, args, multiplier = 1):\n        super(SupCEHeadResNet, self).__init__()\n        model_fun, dim_in = model_dict[args.model]\n\n        if args.model == 'resnet50':\n            model = models.resnet50(pretrained=True)\n            for module in model.modules():\n                if isinstance(module, nn.BatchNorm2d):\n                    if hasattr(module, 'weight'):\n                        module.weight.requires_grad_(False)\n                    if hasattr(module, 'bias'):\n                        module.bias.requires_grad_(False)\n                    module.eval()\n            modules=list(model.children())[:-1] # remove last linear layer\n            self.encoder =nn.Sequential(*modules)\n        elif args.model == 'resnet34':\n            model = models.resnet34(pretrained=True)\n            for name, p in model.named_parameters():\n                if not name.startswith('layer4'):\n                    p.requires_grad = False\n            modules=list(model.children())[:-1] # remove last linear layer\n            self.encoder =nn.Sequential(*modules)\n\n        else:\n            self.encoder = model_fun()\n  \n        self.fc = nn.Linear(dim_in, args.n_cls)\n        self.multiplier = multiplier\n        self.dropout = nn.Dropout(0.5)\n\n        if args.head == 'linear':\n            self.head = nn.Sequential(nn.Linear(dim_in, args.feat_dim))\n        elif args.head == 'mlp':\n            self.head = nn.Sequential(\n                nn.Linear(dim_in, dim_in),\n                nn.ReLU(inplace=True),\n                nn.Linear(dim_in, args.feat_dim)\n            )\n    \n    \n    def forward(self, x):\n\n        feat = self.encoder(x).squeeze()\n        unnorm_features = self.head(feat)\n        features= F.normalize(unnorm_features, dim=1)\n        return features\n    \n    def intermediate_forward(self, x):\n        feat = self.encoder(x).squeeze()\n        return F.normalize(feat, dim=1)\n\nFile Path: models/head_wrn_vmf.py\nContent:\nclass HeadWideResNet(nn.Module):\n    \"\"\"encoder + head\"\"\"\n    def __init__(self, args):\n        super(HeadWideResNet, self).__init__()\n        num_classes = 10\n        layers = 40\n        widen_factor = 2\n        droprate = 0.3\n        model = WideResNet(layers, num_classes, widen_factor, droprate)\n        model_name = '/u/b/a/baihaoyue/private/ood_detection/woods_ood/CIFAR/snapshots/pretrained/cifar10_wrn_pretrained_epoch_99.pt'\n        if os.path.isfile(model_name):\n            print('found pretrained model')\n            model.load_state_dict(torch.load(model_name))\n            print('Model restored!')\n        dim_in = model.fc.in_features\n        self.encoder = model\n        self.fc = nn.Linear(dim_in, num_classes)\n        if args.head == 'linear':\n            self.head = nn.Linear(dim_in, args.feat_dim)\n        elif args.head == 'mlp':\n            self.head = nn.Sequential(\n                nn.Linear(dim_in, dim_in),\n                nn.ReLU(inplace=True),\n                nn.Linear(dim_in, args.feat_dim)\n            )\n    \n    def forward(self, x):\n        x, feat = self.encoder(x)\n        unnorm_features = self.head(feat)\n        features= F.normalize(unnorm_features, dim=1)\n        return features\n    \n    def intermediate_forward(self, x):\n        feat = self.encoder(x).squeeze()\n        return F.normalize(feat, dim=1)\n\nFile Path: utils/losses.py\nContent:\nclass CompLoss(nn.Module):\n    '''\n    Compactness Loss with class-conditional prototypes\n    '''\n    def __init__(self, args, temperature=0.07, base_temperature=0.07, use_domain = False):\n        super(CompLoss, self).__init__()\n        self.args = args\n        self.temperature = temperature\n        self.base_temperature = base_temperature\n        self.use_domain = use_domain\n\n    def forward(self, features, prototypes, labels, domains):\n\n        prototypes = F.normalize(prototypes, dim=1) \n        proxy_labels = torch.arange(0, self.args.n_cls).cuda()\n        labels = labels.contiguous().view(-1, 1)\n        mask = torch.eq(labels, proxy_labels.T).float().cuda() #bz, cls\n\n        # compute logits\n        feat_dot_prototype = torch.div(\n            torch.matmul(features, prototypes.T),\n            self.temperature)\n        if self.use_domain:\n            domains = domains.contiguous().view(-1, 1)\n            label_mask = torch.eq(labels, labels.T).float().cuda() #bz, bz\n            neg_label_mask = 1 - label_mask\n            domain_mask = torch.eq(domains, domains.T).float().cuda() #bz, bz\n            feat_dot_feat = torch.div(\n                torch.matmul(features, features.T),\n                self.temperature)\n\n            # for numerical stability  \n            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)\n            feat_logits_max, _ = torch.max(feat_dot_feat, dim=1, keepdim=True)\n            logits_max = torch.max(feat_logits_max, feat_logits_max)\n\n            prot_logits = feat_dot_prototype - logits_max.detach()\n            feat_logits = feat_dot_feat - logits_max.detach()\n\n            exp_prot_logits = torch.exp(prot_logits) \n            exp_feat_logits = torch.exp(feat_logits) \n\n            pos_part = (prot_logits * mask).sum(1, keepdim=True) # (bz, 1)\n\n            prot_neg_pairs = exp_prot_logits.sum(1, keepdim=True)\n            same_domain_neg_pairs = (neg_label_mask * domain_mask * exp_feat_logits).sum(1, keepdim=True) \n            neg_part = torch.log(prot_neg_pairs + same_domain_neg_pairs) # (bz, 1)\n\n            loss = - (self.temperature / self.base_temperature) *(pos_part - neg_part).mean()\n\n        else: \n            # for numerical stability\n            logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)\n            logits = feat_dot_prototype - logits_max.detach()\n\n            # compute log_prob\n            exp_logits = torch.exp(logits) \n            log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))\n\n            # compute mean of log-likelihood over positive\n            mean_log_prob_pos = (mask * log_prob).sum(1) \n\n            # loss\n            loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos.mean()\n        return loss\n\nclass DisLoss(nn.Module):\n    '''\n    Dispersion Loss with EMA prototypes\n    '''\n    def __init__(self, args, model, loader, temperature= 0.1, base_temperature=0.1):\n        super(DisLoss, self).__init__()\n        self.args = args\n        self.temperature = temperature\n        self.base_temperature = base_temperature\n        self.register_buffer(\"prototypes\", torch.zeros(self.args.n_cls,self.args.feat_dim))\n        self.model = model\n        self.loader = loader\n        self.init_class_prototypes()\n\n    def forward(self, features, labels):    \n\n        prototypes = self.prototypes\n        num_cls = self.args.n_cls\n        for j in range(len(features)):\n            prototypes[labels[j].item()] = F.normalize(prototypes[labels[j].item()] *self.args.proto_m + features[j]*(1-self.args.proto_m), dim=0)\n        self.prototypes = prototypes.detach()\n        labels = torch.arange(0, num_cls).cuda()\n        labels = labels.contiguous().view(-1, 1)\n\n        mask = (1- torch.eq(labels, labels.T).float()).cuda()\n\n        logits = torch.div(\n            torch.matmul(prototypes, prototypes.T),\n            self.temperature)\n\n        logits_mask = torch.scatter(\n            torch.ones_like(mask),\n            1,\n            torch.arange(num_cls).view(-1, 1).cuda(),\n            0\n        )\n        mask = mask * logits_mask\n        mean_prob_neg = torch.log((mask * torch.exp(logits)).sum(1) / mask.sum(1))\n        mean_prob_neg = mean_prob_neg[~torch.isnan(mean_prob_neg)]\n        loss = self.temperature / self.base_temperature * mean_prob_neg.mean()\n        return loss\n\n    def init_class_prototypes(self):\n        \"\"\"Initialize class prototypes\"\"\"\n        self.model.eval()\n        start = time.time()\n        prototype_counts = [0]*self.args.n_cls\n        with torch.no_grad():\n            prototypes = torch.zeros(self.args.n_cls,self.args.feat_dim).cuda()\n            for i, values in enumerate(self.loader):\n                if len(values) == 3:\n                    input, target, domain = values\n                elif len(values) == 2:\n                    input, target = values\n                    domain = None \n                input, target = input.cuda(), target.cuda()\n                features = self.model(input)\n                for j, feature in enumerate(features):\n                    prototypes[target[j].item()] += feature\n                    prototype_counts[target[j].item()] += 1\n            for cls in range(self.args.n_cls):\n                prototypes[cls] /=  prototype_counts[cls] \n            duration = time.time() - start\n            print(f'Time to initialize prototypes: {duration:.3f}')\n            prototypes = F.normalize(prototypes, dim=1)\n            self.prototypes = prototypes\n\nFile Path: train_hypo.py\nContent:\n        # HYPO Loss calculation\n        dis_loss = criterion_dis(features, target) \n        comp_loss = criterion_comp(features, criterion_dis.prototypes, target, None)\n        loss = args.w * comp_loss + dis_loss\n\nFile Path: eval_hypo.py\nContent:\n        # Classification during testing by identifying the closest class prototype\n        feat_dot_prototype = torch.div(torch.matmul(features, criterion_dis.prototypes.T), args.temp)\n        # for numerical stability\n        logits_max, _ = torch.max(feat_dot_prototype, dim=1, keepdim=True)\n        logits = feat_dot_prototype - logits_max.detach()\n        pred = logits.data.max(1)[1]",
+    "experimental_info": "Training and Evaluation Parameters for HYPO:\n- GPU: Default 6 for training (`train_hypo.py`), Default 7 for evaluation (`eval_hypo.py`)\n- Random Seed: 4\n- Loss Scale (`w`): 2.0 (Balances compactness and dispersion losses in `train_hypo.py`)\n- Prototype Update Weight (`proto_m`): 0.95 (Exponential Moving Average factor for updating prototypes in `DisLoss`)\n- Feature Dimension (`feat_dim`): 128\n- In-distribution Dataset (`in-dataset`): \"CIFAR-10\" (choices also include 'PACS', 'VLCS', 'CIFAR-100', 'ImageNet-100', 'OfficeHome', 'terra_incognita')\n- ID Dataset Location (`id_loc`): \"datasets/CIFAR10\"\n- OOD Dataset Location (`ood_loc`): \"datasets\" (used in `eval_hypo.py` for corrupted/target domains)\n- Model Architecture (`model`): 'resnet18' (choices include 'resnet18', 'wrt40', 'wrt28', 'densenet100', 'resnet50', 'resnet34')\n- Head Type (`head`): 'mlp' (choices: 'mlp', 'linear'; defines the projection head for features)\n- Loss Function: 'hypo' (explicitly naming the method)\n- Number of Epochs: 50\n- Batch Size: 32 for training, 128 for evaluation\n- Learning Rate: 5e-4\n- Learning Rate Decay Epochs: '100,150,180' (for linear schedule)\n- Learning Rate Decay Rate: 0.1\n- Cosine Annealing: False by default (activated if `--cosine` flag is present)\n- Momentum: 0.9\n- Weight Decay (`wd`): 1e-4\n- Print Frequency: 10 batches\n- Temperature (`temp`): 0.1 (used in loss calculations and classification score generation)\n- Warm-up Learning Rate: Enabled if batch size > 256, for 10 epochs, from 0.001 to target LR.\n- Normalize Feature Embeddings: False by default (activated if `--normalize` flag is present, features are normalized before loss calculation and classification)\n- Pre-fetching Threads (`prefetch`): 4\n- Target Domain (`target_domain`): 'cartoon' (used for domain generalization datasets like PACS, VLCS, OfficeHome, Terra Incognita)\n- Corrupted Type (`cortype`): 'gaussian_noise' (used in `eval_hypo.py` for corrupted OOD datasets like CorCIFAR-10/ImageNet-100-C)\n- Use Domain in Compactness Loss (`use_domain`): False (whether to use in-domain negative pairs in compactness loss, experimental feature)\n- Checkpoint Name (`ckpt_name`): 'ckpt_hypo_resnet18_cifar10' (for loading a pre-trained model during evaluation)\n- Checkpoint Location (`ckpt_loc`): 'checkpoints/CIFAR-10' (directory to find the model checkpoint)"
+}
