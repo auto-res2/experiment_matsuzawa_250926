@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed FroFA method involves extracting frozen features from pretrained Vision Transformers (ViTs), reshaping the 2D features to a 3D representation (e.g., √N × √N × C) to resemble image structure, and then scaling feature values to a standard range (e.g., [0, 1]). Standard image augmentation functions are then applied to these scaled features, followed by an inverse mapping to return them to their original feature value range. A lightweight model, typically a Multi-head Attention Pooling (MAP) layer followed by a classification layer, is then trained on these augmented frozen features. Three variations of FroFA are explored: default FroFA (single random value across the entire feature), Channel FroFA (cFroFA, per-channel stochasticity in augmentation values), and Channel2 FroFA (c2FroFA, per-channel scaling for mapping and per-channel stochasticity for augmentation). Eighteen different augmentation types are investigated, categorized as geometric, crop & drop, stylistic, and other.
+
+# GitHub URLs List
+['https://github.com/google-research/big_vision', 'https://github.com/google-research/scenic']
+Output:
+{
+    "index": 0
+}
