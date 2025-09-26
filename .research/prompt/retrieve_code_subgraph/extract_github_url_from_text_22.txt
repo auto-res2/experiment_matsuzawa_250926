@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+OPA assumes an object-oriented state space where elements share functionalities within prototypes. It consists of three main stages: 1. Novelty Detection: An auto-encoder trained on source domain objects identifies unseen objects in the target domain based on reconstruction loss, mapping them to a special 'unseen prototype' space. 2. Online Prototype Alignment: An exploration policy (πexp) and an inference model (qθ) are trained in simulated unseen environments derived from the source domain. πexp maximizes the mutual information between its trajectories and the original prototypes of unseen elements, guided by an intrinsic reward from qθ that indicates how informative a transition is for prototype inference. This allows efficient learning of exploration behaviors without direct access to the target domain or its ground truth prototypes. 3. Policy Reuse: In the target domain, πexp is run for several episodes to gather information. qθ infers prototype distributions, which are then used to train a lightweight classifier (fcls) that maps unseen objects to their inferred prototypes. This combined mapping function (fproto|T) allows the task policy (πtask), originally trained in the source domain, to be directly applied to the target domain.
+
+# GitHub URLs List
+['https://github.com/albertcity/OPA']
+Output:
+{
+    "index": 0
+}
