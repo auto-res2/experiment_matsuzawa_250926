@@ -1,0 +1,10 @@
+{
+  "research_topic": "Improving generalization performance of Few-shot Prototypical Networks",
+  "queries": [
+    "prototypical networks generalization",
+    "few-shot regularization",
+    "transductive prototypical networks",
+    "distribution calibration few-shot",
+    "feature augmentation few-shot"
+  ]
+}
