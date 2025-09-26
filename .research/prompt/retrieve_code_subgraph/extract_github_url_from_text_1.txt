@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+FeCAM operates in a classifier-incremental learning setting, where the feature extractor is frozen after the first task (or uses a pretrained model). It re-introduces the optimal Bayes classifier using the anisotropic Mahalanobis distance, assuming a multivariate normal feature distribution for each class. Key technical components include: 1) **Class Prototypes**: Computed as average feature vectors. 2) **Covariance Matrix Approximation**: Can use either a common covariance matrix incrementally updated across tasks (Σ1:t) or a separate covariance matrix for each class (Σy). 3) **Correlation Normalization**: Applied to individual covariance matrices to equalize diagonal elements (variances), making distances comparable across classes. 4) **Covariance Shrinkage**: Used to ensure the covariance matrices are full-rank and invertible, especially when the number of samples is less than feature dimensions. 5) **Tukey's Ladder of Powers Transformation**: Applied to feature vectors to reduce skewness and make distributions more Gaussian-like before computing covariance matrices. The final classification is based on the squared Mahalanobis distance using the transformed features and the normalized, shrunken inverse covariance matrices.
+
+# GitHub URLs List
+['https://github.com/dipamgoswami/FeCAM']
+Output:
+{
+    "index": 0
+}
