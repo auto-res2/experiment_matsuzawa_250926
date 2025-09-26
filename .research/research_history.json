@@ -1,0 +1,10 @@
+{
+  "research_topic": "Improving generalization performance of Few-shot Prototypical Networks",
+  "queries": [
+    "prototypical network generalization",
+    "few-shot meta-regularization",
+    "prototype augmentation",
+    "few-shot domain generalization",
+    "metric learning regularization"
+  ]
+}
