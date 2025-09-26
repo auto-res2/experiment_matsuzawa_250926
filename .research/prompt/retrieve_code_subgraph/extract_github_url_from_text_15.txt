@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The methodology involves analyzing the sensitivity of meta-learning algorithms to support, query, and task data diversity. Four data augmentation modes are introduced: support augmentation (applied to inner-loop support data), query augmentation (applied to evaluation data), task augmentation (increasing task diversity by uniformly augmenting whole classes), and shot augmentation (amplifying test-time shots and training with similar support augmentations). A variety of standard (rotation, horizontal flip, random erase) and advanced (CutMix, MixUp, Self-Mix) augmentation techniques are applied within these modes. The core technical contribution is Meta-MaxUp, which adapts the MaxUp strategy to meta-learning. This involves sampling multiple augmentations for each task during training, selecting the augmented task that maximizes the outer-loop loss, and then performing a parameter update to minimize this maximized loss. This process is formalized as a minimax optimization problem: min_θ E_T [ max_M∈S L(F_θ', M(Tq)) ], where θ' is obtained by fine-tuning A(θ, M(Ts)).
+
+# GitHub URLs List
+['https://github.com/RenkunNi/MetaAug']
+Output:
+{
+    "index": 0
+}
