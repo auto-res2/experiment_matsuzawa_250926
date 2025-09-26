@@ -1,0 +1,2011 @@
+
+Input:
+You are a researcher with expertise in engineering in the field of machine learning.
+
+# Instructions
+- The content described in “Repository Content” corresponds to the GitHub repository of the method described in “Method.”
+- Please extract the following two pieces of information from “Repository Content”:
+    - experimental_code：Extract the implementation sections that are directly related to the method described in “Method.”
+    - experimental_info：Extract and output the experimental settings related to the method described in “Method.”
+
+# Method
+The core methodology involves training a lightweight adapter to rectify diverse target domain feature styles to align with the source domain, allowing the use of a pre-trained source domain segmentation model. To achieve this, the method employs: 1. **Local Domain Perturbation:** Gaussian noise is injected into the feature channel statistics (mean µo and variance σo) of individual source domain images. Perturbation factors α and β control this process, generating perturbed feature maps (Fp). This is applied with a probability Plocal. 2. **Global Domain Perturbation:** To enhance diversity and stability, global style statistics (µdatum) are computed through momentum updating across the entire source dataset. These global statistics replace individual image statistics in the perturbation process, allowing for more aggressive noise application without training collapse. This is applied with a probability Pglobal. 3. **Domain Rectification Module:** A compact adapter takes the perturbed features and predicts two rectification vectors ({αrect, βrect}) to adjust the feature channel statistics back to the original source domain style, producing rectified features (Frect). 4. **Cyclic Domain Alignment:** To supervise the rectification process, a cyclic alignment loss (Lcyc) is introduced. After Frect is obtained, it is re-perturbed with the same noise and then reverse-rectified by the adapter, with Lcyc enforcing alignment between the original source feature statistics and the cyclically rectified feature statistics. An additional alignment loss (Lalign) directly constrains the statistics of Frect to match those of the original feature. The overall model is optimized using a combined loss (L = LBCE + Lcyc + Lalign), where LBCE is the standard Binary Cross-Entropy loss. During inference, the trained adapter directly rectifies target domain features before they are fed into the source domain segmentation model.
+
+# Repository Content
+File Path: common/evaluation.py
+Content:
+r""" Evaluate mask prediction """
+import torch
+
+
+class Evaluator:
+    r""" Computes intersection and union between prediction and ground-truth """
+    @classmethod
+    def initialize(cls):
+        cls.ignore_index = 255
+
+    @classmethod
+    def classify_prediction(cls, pred_mask, batch):
+        gt_mask = batch.get('query_mask')
+
+        # Apply ignore_index in PASCAL-5i masks (following evaluation scheme in PFE-Net (TPAMI 2020))
+        query_ignore_idx = batch.get('query_ignore_idx')
+        if query_ignore_idx is not None:
+            assert torch.logical_and(query_ignore_idx, gt_mask).sum() == 0
+            query_ignore_idx *= cls.ignore_index
+            gt_mask = gt_mask + query_ignore_idx
+            pred_mask[gt_mask == cls.ignore_index] = cls.ignore_index
+
+        # compute intersection and union of each episode in a batch
+        area_inter, area_pred, area_gt = [],  [], []
+        for _pred_mask, _gt_mask in zip(pred_mask, gt_mask):
+            _inter = _pred_mask[_pred_mask == _gt_mask]
+            if _inter.size(0) == 0:  # as torch.histc returns error if it gets empty tensor (pytorch 1.5.1)
+                _area_inter = torch.tensor([0, 0], device=_pred_mask.device)
+            else:
+                _area_inter = torch.histc(_inter, bins=2, min=0, max=1)
+            area_inter.append(_area_inter)
+            area_pred.append(torch.histc(_pred_mask, bins=2, min=0, max=1))
+            area_gt.append(torch.histc(_gt_mask, bins=2, min=0, max=1))
+        area_inter = torch.stack(area_inter).t()
+        area_pred = torch.stack(area_pred).t()
+        area_gt = torch.stack(area_gt).t()
+        area_union = area_pred + area_gt - area_inter
+
+        return area_inter, area_union
+
+File Path: common/logger.py
+Content:
+r""" Logging during training/testing """
+import datetime
+import logging
+import os
+
+from tensorboardX import SummaryWriter
+import torch
+
+
+class AverageMeter:
+    r""" Stores loss, evaluation results """
+    def __init__(self, dataset):
+        self.benchmark = dataset.benchmark
+        if self.benchmark == 'pascal':
+            self.class_ids_interest = dataset.class_ids
+            self.class_ids_interest = torch.tensor(self.class_ids_interest).cuda()
+            self.nclass = 20
+        elif self.benchmark == 'fss':
+            self.class_ids_interest = dataset.class_ids
+            self.class_ids_interest = torch.tensor(self.class_ids_interest).cuda()
+            self.nclass = 1000
+        elif self.benchmark == 'deepglobe':
+            self.class_ids_interest = dataset.class_ids
+            self.class_ids_interest = torch.tensor(self.class_ids_interest).cuda()
+            self.nclass = 6
+        elif self.benchmark == 'isic':
+            self.class_ids_interest = dataset.class_ids
+            self.class_ids_interest = torch.tensor(self.class_ids_interest).cuda()
+            self.nclass = 3
+        elif self.benchmark == 'lung':
+            self.class_ids_interest = dataset.class_ids
+            self.class_ids_interest = torch.tensor(self.class_ids_interest).cuda()
+            self.nclass = 1
+
+        self.intersection_buf = torch.zeros([2, self.nclass]).float().cuda()
+        self.union_buf = torch.zeros([2, self.nclass]).float().cuda()
+        self.ones = torch.ones_like(self.union_buf)
+        self.loss_buf = []
+
+    def update(self, inter_b, union_b, class_id, loss):
+        self.intersection_buf.index_add_(1, class_id, inter_b.float())
+        self.union_buf.index_add_(1, class_id, union_b.float())
+        if loss is None:
+            loss = torch.tensor(0.0)
+        self.loss_buf.append(loss)
+
+    def compute_iou(self):
+        iou = self.intersection_buf.float() / \
+              torch.max(torch.stack([self.union_buf, self.ones]), dim=0)[0]
+        iou = iou.index_select(1, self.class_ids_interest)
+        miou = iou[1].mean() * 100
+
+        fb_iou = (self.intersection_buf.index_select(1, self.class_ids_interest).sum(dim=1) /
+                  self.union_buf.index_select(1, self.class_ids_interest).sum(dim=1)).mean() * 100
+
+        return miou, fb_iou
+
+    def write_result(self, split, epoch):
+        iou, fb_iou = self.compute_iou()
+
+        loss_buf = torch.stack(self.loss_buf)
+        msg = '\n*** %s ' % split
+        msg += '[@Epoch %02d] ' % epoch
+        msg += 'Avg L: %6.5f  ' % loss_buf.mean()
+        msg += 'mIoU: %5.2f   ' % iou
+        msg += 'FB-IoU: %5.2f   ' % fb_iou
+
+        msg += '***\n'
+        Logger.info(msg)
+
+    def write_process(self, batch_idx, datalen, epoch, write_batch_idx=20):
+        if batch_idx % write_batch_idx == 0:
+            msg = '[Epoch: %02d] ' % epoch if epoch != -1 else ''
+            msg += '[Batch: %04d/%04d] ' % (batch_idx+1, datalen)
+            iou, fb_iou = self.compute_iou()
+            if epoch != -1:
+                loss_buf = torch.stack(self.loss_buf)
+                msg += 'L: %6.5f  ' % loss_buf[-1]
+                msg += 'Avg L: %6.5f  ' % loss_buf.mean()
+            msg += 'mIoU: %5.2f  |  ' % iou
+            msg += 'FB-IoU: %5.2f' % fb_iou
+            Logger.info(msg)
+
+
+class Logger:
+    r""" Writes evaluation results of training/testing """
+    @classmethod
+    def initialize(cls):
+
+        cls.logpath = './'
+
+        logging.basicConfig(filemode='w',
+                            filename=os.path.join(cls.logpath, 'log.txt'),
+                            level=logging.INFO,
+                            format='%(message)s',
+                            datefmt='%m-%d %H:%M:%S')
+
+        # Console log config
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(message)s')
+        console.setFormatter(formatter)
+        logging.getLogger('').addHandler(console)
+
+
+
+    @classmethod
+    def info(cls, msg):
+        r""" Writes log message to log.txt """
+        logging.info(msg)
+
+    @classmethod
+    def save_model_miou(cls, model, epoch, val_miou,name='best_model.pt'):
+        torch.save(model.state_dict(), os.path.join(cls.logpath, name))
+        cls.info('Model saved @%d w/ val. mIoU: %5.2f.\n' % (epoch, val_miou))
+
+    @classmethod
+    def log_params(cls, model):
+        backbone_param = 0
+        learner_param = 0
+        for k in model.state_dict().keys():
+            n_param = model.state_dict()[k].view(-1).size(0)
+            if k.split('.')[0] in 'backbone':
+                if k.split('.')[1] in ['classifier', 'fc']:  # as fc layers are not used in HSNet
+                    continue
+                backbone_param += n_param
+            else:
+                learner_param += n_param
+        Logger.info('Backbone # param.: %d' % backbone_param)
+        Logger.info('Learnable # param.: %d' % learner_param)
+        Logger.info('Total # param.: %d' % (backbone_param + learner_param))
+
+
+File Path: common/utils.py
+Content:
+r""" Helper functions """
+import random
+
+import torch
+import numpy as np
+
+
+def fix_randseed(seed):
+    r""" Set random seeds for reproducibility """
+    if seed is None:
+        seed = int(random.random() * 1e5)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+def mean(x):
+    return sum(x) / len(x) if len(x) > 0 else 0.0
+
+
+def to_cuda(batch):
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor):
+            batch[key] = value.cuda()
+    return batch
+
+
+def to_cpu(tensor):
+    return tensor.detach().clone().cpu()
+
+File Path: data_util/ISIC_Split.py
+Content:
+import pandas as pd
+import os
+import shutil
+from PIL import Image
+
+df = pd.read_csv('./isic/class_id.csv')
+
+dir = '../data/ISIC/ISIC/ISIC2018_Task1-2_Training_Input/'
+
+dict = {'seborrheic_keratosis' : '1','nevus' : '2','melanoma' : '3'}
+
+for directory in ['1', '2', '3']:
+    subdir = os.path.join(dir,directory)
+    if not os.path.exists(subdir):
+        os.makedirs(subdir)
+
+for idx, row in df.iterrows():
+
+    src_path = dir + row['ID'] + '.jpg'
+    dest_path = dir + dict[row['Class']] + '/' + row['ID'] + '.jpg'
+
+    try:
+        img = Image.open(src_path)
+        img_resized = img.resize((512, 512))
+        img_resized.save(dest_path)
+    except:
+        continue
+
+File Path: data_util/datasets.py
+Content:
+r""" Dataloader builder for few-shot semantic segmentation dataset  """
+from torchvision import transforms
+from torch.utils.data import DataLoader
+
+from .pascal import DatasetPASCAL
+from .fss import DatasetFSS
+from .deepglobe import DatasetDeepglobe
+from .isic import DatasetISIC
+from .lung import DatasetLung
+
+
+class FSSDataset:
+
+    @classmethod
+    def initialize(cls, img_size, datapath):
+
+        cls.datasets = {
+            'pascal': DatasetPASCAL,
+            'fss': DatasetFSS,
+            'deepglobe': DatasetDeepglobe,
+            'isic': DatasetISIC,
+            'lung': DatasetLung,
+        }
+
+        cls.img_mean = [0.485, 0.456, 0.406]
+        cls.img_std = [0.229, 0.224, 0.225]
+        cls.datapath = datapath
+
+        cls.transform = transforms.Compose([transforms.Resize(size=(img_size, img_size)),       ##img_size = (400,400)
+                                            transforms.ToTensor(),
+                                            transforms.Normalize(cls.img_mean, cls.img_std)])
+
+    @classmethod
+    def build_dataloader(cls, benchmark, bsz, nworker, split, shot=1):
+        # Force randomness during training for diverse episode combinations
+        # Freeze randomness during testing for reproducibility
+        shuffle = split == 'trn'
+        nworker = nworker if split == 'trn' else 0
+
+        dataset = cls.datasets[benchmark](cls.datapath, transform=cls.transform, split=split, shot=shot)
+        dataloader = DataLoader(dataset, batch_size=bsz, shuffle=shuffle, num_workers=nworker)
+
+        return dataloader
+
+File Path: data_util/deepglobe.py
+Content:
+r""" FSS-1000 few-shot semantic segmentation dataset """
+import os
+import glob
+
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+import torch
+import PIL.Image as Image
+import numpy as np
+
+
+class DatasetDeepglobe(Dataset):
+    def __init__(self, datapath, transform, split, shot, num=600):
+        self.split = split
+        self.benchmark = 'deepglobe'
+        self.shot = shot
+        self.num = num
+
+        self.base_path = os.path.join(datapath, 'Deepglobe')
+
+        self.categories = ['1','2','3','4','5','6']
+
+        self.class_ids = range(0, 6)
+        self.img_metadata_classwise = self.build_img_metadata_classwise()
+
+        self.transform = transform
+
+    def __len__(self):
+        return self.num
+
+    def __getitem__(self, idx):
+        query_name, support_names, class_sample = self.sample_episode(idx)
+        query_img, query_mask, support_imgs, support_masks = self.load_frame(query_name, support_names)
+
+        query_img = self.transform(query_img)
+        query_mask = F.interpolate(query_mask.unsqueeze(0).unsqueeze(0).float(), query_img.size()[-2:], mode='nearest').squeeze()
+
+        support_imgs = torch.stack([self.transform(support_img) for support_img in support_imgs])
+
+        support_masks_tmp = []
+        for smask in support_masks:
+            smask = F.interpolate(smask.unsqueeze(0).unsqueeze(0).float(), support_imgs.size()[-2:], mode='nearest').squeeze()
+            support_masks_tmp.append(smask)
+        support_masks = torch.stack(support_masks_tmp)
+
+        batch = {'query_img': query_img,
+                 'query_mask': query_mask,
+                 'query_name': query_name,
+
+                 'support_imgs': support_imgs,
+                 'support_masks': support_masks,
+                 'support_names': support_names,
+
+                 'class_id': torch.tensor(class_sample)}
+
+        return batch
+
+    def load_frame(self, query_name, support_names):
+        query_img = Image.open(query_name).convert('RGB')
+        support_imgs = [Image.open(name).convert('RGB') for name in support_names]
+
+        query_id = query_name.split('/')[-1].split('.')[0]
+        ann_path = os.path.join(self.base_path, query_name.split('/')[-4], 'test', 'groundtruth')
+        query_name = os.path.join(ann_path, query_id) + '.png'
+        support_ids = [name.split('/')[-1].split('.')[0] for name in support_names]
+        support_names = [os.path.join(ann_path, sid) + '.png' for name, sid in zip(support_names, support_ids)]
+
+        query_mask = self.read_mask(query_name)
+        support_masks = [self.read_mask(name) for name in support_names]
+
+        return query_img, query_mask, support_imgs, support_masks
+
+    def read_mask(self, img_name):
+        mask = torch.tensor(np.array(Image.open(img_name).convert('L')))
+        mask[mask < 128] = 0
+        mask[mask >= 128] = 1
+        return mask
+
+    def sample_episode(self, idx):
+        class_id = idx % len(self.class_ids)
+        class_sample = self.categories[class_id]
+
+        query_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+        support_names = []
+        while True:  # keep sampling support set if query == support
+            support_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+            if query_name != support_name: support_names.append(support_name)
+            if len(support_names) == self.shot: break
+
+        return query_name, support_names, class_id
+
+
+    def build_img_metadata(self):
+        img_metadata = []
+        for cat in self.categories:
+            os.path.join(self.base_path, cat)
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.base_path, cat, 'test', 'origin'))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'jpg':
+                    img_metadata.append(img_path)
+        return img_metadata
+
+    def build_img_metadata_classwise(self):
+        img_metadata_classwise = {}
+        for cat in self.categories:
+            img_metadata_classwise[cat] = []
+
+        for cat in self.categories:
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.base_path, cat, 'test', 'origin'))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'jpg':
+                    img_metadata_classwise[cat] += [img_path]
+        return img_metadata_classwise
+
+File Path: data_util/fss.py
+Content:
+r""" FSS-1000 few-shot semantic segmentation dataset """
+import os
+import glob
+
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+import torch
+import PIL.Image as Image
+import numpy as np
+
+
+class DatasetFSS(Dataset):
+    def __init__(self, datapath, transform, split, shot):
+        self.split = split
+        self.benchmark = 'fss'
+        self.shot = shot
+
+        self.base_path = os.path.join(datapath, 'FSS-1000')
+
+        # Given predefined test split, load randomly generated training/val splits:
+        # (reference regarding trn/val/test splits: https://github.com/HKUSTCV/FSS-1000/issues/7))
+        with open('./data_util/splits/fss/%s.txt' % split, 'r') as f:
+            self.categories = f.read().split('\n')[:-1]
+        self.categories = sorted(self.categories)
+
+        self.class_ids = self.build_class_ids()
+        self.img_metadata = self.build_img_metadata()
+
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.img_metadata)
+
+    def __getitem__(self, idx):
+        query_name, support_names, class_sample = self.sample_episode(idx)
+        query_img, query_mask, support_imgs, support_masks = self.load_frame(query_name, support_names)
+
+        query_img = self.transform(query_img)
+        query_mask = F.interpolate(query_mask.unsqueeze(0).unsqueeze(0).float(), query_img.size()[-2:], mode='nearest').squeeze()
+
+        support_imgs = torch.stack([self.transform(support_img) for support_img in support_imgs])
+
+        support_masks_tmp = []
+        for smask in support_masks:
+            smask = F.interpolate(smask.unsqueeze(0).unsqueeze(0).float(), support_imgs.size()[-2:], mode='nearest').squeeze()
+            support_masks_tmp.append(smask)
+        support_masks = torch.stack(support_masks_tmp)
+
+        batch = {'query_img': query_img,
+                 'query_mask': query_mask,
+                 'query_name': query_name,
+
+                 'support_imgs': support_imgs,
+                 'support_masks': support_masks,
+                 'support_names': support_names,
+
+                 'class_id': torch.tensor(class_sample)}
+
+        return batch
+
+    def load_frame(self, query_name, support_names):
+        query_img = Image.open(query_name).convert('RGB')
+        support_imgs = [Image.open(name).convert('RGB') for name in support_names]
+
+        query_id = query_name.split('/')[-1].split('.')[0]
+        query_name = os.path.join(os.path.dirname(query_name), query_id) + '.png'
+        support_ids = [name.split('/')[-1].split('.')[0] for name in support_names]
+        support_names = [os.path.join(os.path.dirname(name), sid) + '.png' for name, sid in zip(support_names, support_ids)]
+
+        query_mask = self.read_mask(query_name)
+        support_masks = [self.read_mask(name) for name in support_names]
+
+        return query_img, query_mask, support_imgs, support_masks
+
+    def read_mask(self, img_name):
+        mask = torch.tensor(np.array(Image.open(img_name).convert('L')))
+        mask[mask < 128] = 0
+        mask[mask >= 128] = 1
+        return mask
+
+    def sample_episode(self, idx):
+        query_name = self.img_metadata[idx]
+        class_sample = self.categories.index(query_name.split('/')[-2])
+        if self.split == 'val':
+            class_sample += 520
+        elif self.split == 'test':
+            class_sample += 760
+
+        support_names = []
+        while True:  # keep sampling support set if query == support
+            support_name = np.random.choice(range(1, 11), 1, replace=False)[0]
+            support_name = os.path.join(os.path.dirname(query_name), str(support_name)) + '.jpg'
+            if query_name != support_name: support_names.append(support_name)
+            if len(support_names) == self.shot: break
+
+        return query_name, support_names, class_sample
+
+    def build_class_ids(self):
+        if self.split == 'trn':
+            class_ids = range(0, 520)
+        elif self.split == 'val':
+            class_ids = range(520, 760)
+        elif self.split == 'test':
+            class_ids = range(760, 1000)
+        return class_ids
+
+    def build_img_metadata(self):
+        img_metadata = []
+        for cat in self.categories:
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.base_path, cat))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'jpg':
+                    img_metadata.append(img_path)
+        return img_metadata
+
+File Path: data_util/isic.py
+Content:
+r""" ISIC few-shot semantic segmentation dataset """
+import os
+import glob
+
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+import torch
+import PIL.Image as Image
+import numpy as np
+
+
+class DatasetISIC(Dataset):
+    def __init__(self, datapath, transform, split, shot, num=600):
+        self.split = split
+        self.benchmark = 'isic'
+        self.shot = shot
+        self.num = num
+
+        self.base_path = os.path.join(datapath, 'ISIC')
+        self.categories = ['1','2','3']
+
+        self.class_ids = range(0, 3)
+        self.img_metadata_classwise = self.build_img_metadata_classwise()
+
+        self.transform = transform
+
+    def __len__(self):
+        return self.num
+
+    def __getitem__(self, idx):
+        query_name, support_names, class_sample = self.sample_episode(idx)
+        query_img, query_mask, support_imgs, support_masks = self.load_frame(query_name, support_names)
+
+        query_img = self.transform(query_img)
+        query_mask = F.interpolate(query_mask.unsqueeze(0).unsqueeze(0).float(), query_img.size()[-2:], mode='nearest').squeeze()
+
+        support_imgs = torch.stack([self.transform(support_img) for support_img in support_imgs])
+
+        support_masks_tmp = []
+        for smask in support_masks:
+            smask = F.interpolate(smask.unsqueeze(0).unsqueeze(0).float(), support_imgs.size()[-2:], mode='nearest').squeeze()
+            support_masks_tmp.append(smask)
+        support_masks = torch.stack(support_masks_tmp)
+
+        batch = {'query_img': query_img,
+                 'query_mask': query_mask,
+                 'query_name': query_name,
+
+                 'support_imgs': support_imgs,
+                 'support_masks': support_masks,
+                 'support_names': support_names,
+
+                 'class_id': torch.tensor(class_sample)}
+
+        return batch
+
+    def load_frame(self, query_name, support_names):
+        query_img = Image.open(query_name).convert('RGB')
+        support_imgs = [Image.open(name).convert('RGB') for name in support_names]
+
+        query_id = query_name.split('/')[-1].split('.')[0]
+        ann_path = os.path.join(self.base_path, 'ISIC2018_Task1_Training_GroundTruth')
+        query_name = os.path.join(ann_path, query_id) + '_segmentation.png'
+        support_ids = [name.split('/')[-1].split('.')[0] for name in support_names]
+        support_names = [os.path.join(ann_path, sid) + '_segmentation.png' for name, sid in zip(support_names, support_ids)]
+
+        query_mask = self.read_mask(query_name)
+        support_masks = [self.read_mask(name) for name in support_names]
+
+        return query_img, query_mask, support_imgs, support_masks
+
+    def read_mask(self, img_name):
+        mask = torch.tensor(np.array(Image.open(img_name).convert('L')))
+        mask[mask < 128] = 0
+        mask[mask >= 128] = 1
+        return mask
+
+    def sample_episode(self, idx):
+        class_id = idx % len(self.class_ids)
+        class_sample = self.categories[class_id]
+
+        query_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+        support_names = []
+        while True:  # keep sampling support set if query == support
+            support_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+            if query_name != support_name: support_names.append(support_name)
+            if len(support_names) == self.shot: break
+
+        return query_name, support_names, class_id
+
+    def build_img_metadata(self):
+        img_metadata = []
+        for cat in self.categories:
+            os.path.join(self.base_path, cat)
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.base_path, 'ISIC2018_Task1-2_Training_Input', cat))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'jpg':
+                    img_metadata.append(img_path)
+        return img_metadata
+
+    def build_img_metadata_classwise(self):
+        img_metadata_classwise = {}
+        for cat in self.categories:
+            img_metadata_classwise[cat] = []
+
+        for cat in self.categories:
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.base_path, 'ISIC2018_Task1-2_Training_Input', cat))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'jpg':
+                    img_metadata_classwise[cat] += [img_path]
+        return img_metadata_classwise
+
+File Path: data_util/lung.py
+Content:
+r""" Chest X-ray few-shot semantic segmentation dataset """
+import os
+import glob
+
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+import torch
+import PIL.Image as Image
+import numpy as np
+
+
+class DatasetLung(Dataset):
+    def __init__(self, datapath, transform, split, shot, num=600):
+        self.split = split
+        self.benchmark = 'lung'
+        self.shot = shot
+        self.num = num
+
+        self.base_path = os.path.join(datapath, 'LungSegmentation')
+        self.img_path = os.path.join(self.base_path, 'CXR_png')
+        self.ann_path = os.path.join(self.base_path, 'masks')
+
+        self.categories = ['1']
+
+        self.class_ids = range(0, 1)
+        self.img_metadata_classwise = self.build_img_metadata_classwise()
+
+        self.transform = transform
+
+    def __len__(self):
+        return self.num
+
+    def __getitem__(self, idx):
+        query_name, support_names, class_sample = self.sample_episode(idx)
+        query_img, query_mask, support_imgs, support_masks = self.load_frame(query_name, support_names)
+
+        query_img = self.transform(query_img)
+        query_mask = F.interpolate(query_mask.unsqueeze(0).unsqueeze(0).float(), query_img.size()[-2:], mode='nearest').squeeze()
+
+        support_imgs = torch.stack([self.transform(support_img) for support_img in support_imgs])
+
+        support_masks_tmp = []
+        for smask in support_masks:
+            smask = F.interpolate(smask.unsqueeze(0).unsqueeze(0).float(), support_imgs.size()[-2:], mode='nearest').squeeze()
+            support_masks_tmp.append(smask)
+        support_masks = torch.stack(support_masks_tmp)
+
+        batch = {'query_img': query_img,
+                 'query_mask': query_mask,
+                 'query_name': query_name,
+
+                 'support_imgs': support_imgs,
+                 'support_masks': support_masks,
+                 'support_names': support_names,
+
+                 'class_id': torch.tensor(class_sample)}
+
+        return batch
+
+    def load_frame(self, query_name, support_names):
+        query_mask = self.read_mask(query_name)
+        support_masks = [self.read_mask(name) for name in support_names]
+
+        query_id = query_name.split('/')[-1]
+        if '_mask' in query_id:
+            query_id = query_id.replace('_mask.png','.png')
+        query_img = Image.open(os.path.join(self.img_path, os.path.basename(query_id))).convert('RGB')
+
+        support_ids = [] # = [os.path.basename(name)[:-9] + '.png' for name in support_names]
+        for name in support_names:
+            sup_id = name.split('/')[-1]
+            if '_mask' in sup_id:
+                sup_id = sup_id.replace('_mask.png', '.png')
+            support_ids.append(sup_id)
+        support_names = [os.path.join(self.img_path, sid) for sid in support_ids]
+        support_imgs = [Image.open(name).convert('RGB') for name in support_names]
+
+        return query_img, query_mask, support_imgs, support_masks
+
+    def read_mask(self, img_name):
+        mask = torch.tensor(np.array(Image.open(img_name).convert('L')))
+        mask[mask < 128] = 0
+        mask[mask >= 128] = 1
+        return mask
+
+    def sample_episode(self, idx):
+        class_id = idx % len(self.class_ids)
+        class_sample = self.categories[class_id]
+
+        query_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+        support_names = []
+        while True:  # keep sampling support set if query == support
+            support_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+            if query_name != support_name: support_names.append(support_name)
+            if len(support_names) == self.shot: break
+
+        return query_name, support_names, class_id
+
+    def build_img_metadata(self):
+        img_metadata = []
+        for cat in self.categories:
+            os.path.join(self.base_path, cat)
+            img_paths = sorted([path for path in glob.glob('%s/*' % os.path.join(self.img_path, cat))])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'png':
+                    img_metadata.append(img_path)
+        return img_metadata
+
+    def build_img_metadata_classwise(self):
+        img_metadata_classwise = {}
+        for cat in self.categories:
+            img_metadata_classwise[cat] = []
+
+        for cat in self.categories:
+            img_paths = sorted([path for path in glob.glob('%s/*' % self.ann_path)])
+            for img_path in img_paths:
+                if os.path.basename(img_path).split('.')[1] == 'png':
+                    img_metadata_classwise[cat] += [img_path]
+        return img_metadata_classwise
+
+File Path: data_util/pascal.py
+Content:
+r""" PASCAL-5i few-shot semantic segmentation dataset """
+import os
+
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+import torch
+import PIL.Image as Image
+import numpy as np
+
+cache_weights={}
+
+class DatasetPASCAL(Dataset):
+    def __init__(self, datapath, transform, split, shot,fold = 4):
+        self.split = 'val' if split in ['val', 'test'] else 'trn'
+        self.fold = fold          #self.fold = 4
+        self.nfolds = 4
+        self.nclass = 20
+        self.benchmark = 'pascal'
+        self.shot = shot
+        self.cache = True
+        self.img_path = os.path.join('./data/VOCdevkit/VOC2012/JPEGImages/')
+        self.ann_path = os.path.join('./data/VOCdevkit/VOC2012/SegmentationClassAug/')
+        self.transform = transform
+
+        self.class_ids = self.build_class_ids()
+        self.img_metadata = self.build_img_metadata()
+        self.img_metadata_classwise = self.build_img_metadata_classwise()
+
+    def __len__(self):
+        return len(self.img_metadata) if self.split == 'trn' else 1000
+
+    def __getitem__(self, idx):
+        idx %= len(self.img_metadata)  # for testing, as n_images < 1000
+        query_name, support_names, class_sample = self.sample_episode(idx)
+        query_img, query_cmask, support_imgs, support_cmasks, org_qry_imsize = self.load_frame(query_name, support_names)
+
+
+        query_img = self.transform(query_img)
+        query_cmask = F.interpolate(query_cmask.unsqueeze(0).unsqueeze(0).float(), query_img.size()[-2:], mode='nearest').squeeze()
+
+        query_mask, query_ignore_idx = self.extract_ignore_idx(query_cmask.float(), class_sample)
+
+        support_imgs = torch.stack([self.transform(support_img) for support_img in support_imgs])
+
+        support_masks = []
+        support_ignore_idxs = []
+        for scmask in support_cmasks:
+            scmask = F.interpolate(scmask.unsqueeze(0).unsqueeze(0).float(), support_imgs.size()[-2:], mode='nearest').squeeze()
+            support_mask, support_ignore_idx = self.extract_ignore_idx(scmask, class_sample)
+            support_masks.append(support_mask)
+            support_ignore_idxs.append(support_ignore_idx)
+        support_masks = torch.stack(support_masks)
+        support_ignore_idxs = torch.stack(support_ignore_idxs)
+
+
+        batch = {'query_img': query_img,
+                 'query_mask': query_mask,
+                 'query_name': query_name,
+                 'query_ignore_idx': query_ignore_idx,
+                 # 'weights':weights,
+                 'org_query_imsize': org_qry_imsize,
+
+                 'support_imgs': support_imgs,
+                 'support_masks': support_masks,
+                 'support_names': support_names,
+                 'support_ignore_idxs': support_ignore_idxs,
+
+                 'class_id': torch.tensor(class_sample)}
+
+        return batch
+
+    def load_weights(self,name):
+        npzfile = np.load(name)
+        edts = npzfile['x']
+        classes = npzfile['c']
+        return {
+            'x': edts,
+            'c': classes.tolist()
+        }
+
+    def get_weights(self, name, cls, cache=True):
+        if self.cache and cache:
+            if name not in cache_weights:
+                cache_weights[name] = self.load_weights(name)
+            weights_dict = cache_weights[name]
+        else:
+            weights_dict = self.load_weights(name)
+        if cls in weights_dict['c']:
+            class_index = weights_dict['c'].index(cls)
+            weights = weights_dict['x'][class_index].copy().astype(np.float32)
+        else:
+            weights = np.zeros(weights_dict['x'][0].shape, np.float32)
+        return weights
+
+    def extract_ignore_idx(self, mask, class_id):
+        boundary = (mask / 255).floor()
+        mask[mask != class_id + 1] = 0
+        mask[mask == class_id + 1] = 1
+
+        return mask, boundary
+
+    def load_frame(self, query_name, support_names):
+        query_img = self.read_img(query_name)
+        query_mask = self.read_mask(query_name)
+        support_imgs = [self.read_img(name) for name in support_names]
+        support_masks = [self.read_mask(name) for name in support_names]
+
+        org_qry_imsize = query_img.size
+
+        return query_img, query_mask, support_imgs, support_masks, org_qry_imsize
+
+    def read_mask(self, img_name):
+        r"""Return segmentation mask in PIL Image"""
+        mask = torch.tensor(np.array(Image.open(os.path.join(self.ann_path, img_name) + '.png')))
+        return mask
+
+    def read_img(self, img_name):
+        r"""Return RGB image in PIL Image"""
+        return Image.open(os.path.join(self.img_path, img_name) + '.jpg')
+
+    def sample_episode(self, idx):
+        query_name, class_sample = self.img_metadata[idx]
+
+        support_names = []
+        while True:  # keep sampling support set if query == support
+            support_name = np.random.choice(self.img_metadata_classwise[class_sample], 1, replace=False)[0]
+            if query_name != support_name: support_names.append(support_name)
+            if len(support_names) == self.shot: break
+
+        return query_name, support_names, class_sample
+
+    def build_class_ids(self):
+        nclass_trn = self.nclass // self.nfolds
+        class_ids_val = [self.fold * nclass_trn + i for i in range(nclass_trn)]
+        class_ids_trn = [x for x in range(self.nclass) if x not in class_ids_val]
+
+        if self.split == 'trn':
+            return class_ids_trn
+        else:
+            return class_ids_val
+
+    def build_img_metadata(self):
+
+        def read_metadata(split, fold_id):
+            fold_n_metadata = os.path.join('data_util/splits/pascal/%s/fold%d.txt' % (split, fold_id))
+            with open(fold_n_metadata, 'r') as f:
+                fold_n_metadata = f.read().split('\n')[:-1]
+            fold_n_metadata = [[data.split('__')[0], int(data.split('__')[1]) - 1] for data in fold_n_metadata]
+            return fold_n_metadata
+
+        img_metadata = []
+        if self.split == 'trn':  # For training, read image-metadata of "the other" folds
+            for fold_id in range(self.nfolds):
+                if fold_id == self.fold:  # Skip validation fold
+                    continue
+                img_metadata += read_metadata(self.split, fold_id)
+
+        elif self.split == 'val':  # For validation, read image-metadata of "current" fold
+            if self.fold != 4:
+                img_metadata = read_metadata(self.split, self.fold)
+        else:
+            raise Exception('Undefined split %s: ' % self.split)
+
+        print('Total (%s) images are : %d' % (self.split, len(img_metadata)))
+
+        return img_metadata
+
+    def build_img_metadata_classwise(self):
+        img_metadata_classwise = {}
+        for class_id in range(self.nclass):
+            img_metadata_classwise[class_id] = []
+
+        for img_name, img_class in self.img_metadata:
+            img_metadata_classwise[img_class] += [img_name]
+        return img_metadata_classwise
+
+File Path: data_util/preprocess.py
+Content:
+import numpy as np
+import glob as glob
+import cv2
+import os,shutil
+from PIL import Image
+
+### This records the main operations to preprocess the data in Deepglobe Dataset
+
+################################################################
+# step 1: cut the big image and mask into smaller one
+################################################################
+
+
+# for f in os.listdir(path_folder):
+#
+#     path = YOUR_PATH_TO_DATA + f.strip()
+#     img = cv2.imread(path)
+#     hei = img.shape[0]
+#     wid = img.shape[1]
+#
+#     # get 6 roi
+#     num = 6
+#     for i in range(0, num):
+#         for j in range(0, num):
+#             print(i)
+#             hei_0 = int(i * hei / num)
+#             hei_1 = int((i + 1) * hei / num)
+#             wid_0 = int(j * wid / num)
+#             wid_1 = int((j + 1) * wid / num)
+#             roiImg = img[hei_0:hei_1, wid_0:wid_1]
+#             if f.endswith('.jpg'):
+#                 path = YOUR_PATH_TO_IMAGE + f.strip()[0:-4] + "_" + str(i) + str(j) + ".jpg"
+#                 cv2.imwrite(path, roiImg)
+#             else:
+#                 path = YOUR_PATH_TO_LABEL + f.strip()[0:-4] + "_" + str(i) + str(j) + ".png"
+#                 cv2.imwrite(path, roiImg)
+
+
+
+############################################################################
+# step 2: filter single color mask and foreground percent small than 0.048
+############################################################################
+
+
+# path_folder = os.path.expanduser(YOUR_PATH_TO_DATA)
+#
+# for f in os.listdir(path_folder):
+#     path = YOUR_PATH_TO_DATA + f.strip()
+#     img = Image.open(path)
+#     colors = img.getcolors()
+#     percent_min = 1
+#     if len(colors) > 1:
+#         for num in colors:
+#             percent = num[0] / 166464
+#             if percent < percent_min:
+#                 percent_min = percent
+#         if percent_min > 0.048:
+#             path = YOUR_PATH_TO_FILTER_DATA + f.strip()
+#             img.save(path)
+
+############################################################################
+# step 3: generate binary mask for each class
+############################################################################
+
+# labelset = [[0, 255, 255], [255, 255, 0], [255, 0, 255], [0, 255, 0], [255, 0, 0], [255, 255, 255]]
+
+# def GetBinaryMap(img, label):
+#     mask = np.ones((img.shape))
+#     isnull = 1
+#     for j in range(len(img)):
+#         for k in range(len(img)):
+#             if (img[j][k].tolist() == labelset[label]):
+#                 mask[j][k] = [255, 255, 255]
+#                 isnull = 0
+#             else:
+#                 mask[j][k] = [0, 0, 0]
+#     return isnull, mask
+#
+#list all files under the folder
+# oridir = YOUR_PATH_TO_FILTERED_LABEL_DATA
+# masklist = os.listdir(oridir)
+# desdir = YOUR_PATH_TO_BINARY_MASK_FOR_EACH_CLASS
+
+# for label in range(0, 6):
+# filename = []# to save the filename which belongs to this class
+# desdir_label = os.path.join(desdir, str(label+1))
+# for i in range(len(masklist)):
+#     if (masklist[i].endswith('.png')):
+#         imgfile = os.path.join(oridir, masklist[i])
+#         img = cv2.imread(imgfile, 1)
+#         isnull, binary_mask = GetBinaryMap(img, label) ## isnull: 1 denotes whole mask is black
+#         if (isnull == 0):
+#             filename.append(os.path.splitext(masklist[i])[0])
+#             cv2.imwrite(desdir_label + '/' + masklist[i], binary_mask)
+# file = open(desdir + str(label+1) + '.txt', 'w')
+# for n in range(len(filename)):
+#     file.write(str(filename[n]))
+#     file.write('\n')
+# file.close()
+
+File Path: main.py
+Content:
+from model.SSP_matching import SSP_MatchingNet
+from util.utils import count_params, set_seed, Compute_iou
+import argparse
+from copy import deepcopy
+import os
+import torch
+from torch.nn import CrossEntropyLoss, DataParallel
+from torch.optim import SGD
+from tqdm import tqdm
+from data_util.datasets import FSSDataset
+from common.logger import Logger, AverageMeter
+import torch.nn as nn
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Domain-Rectifying Adapter for CD-FSS')
+    parser.add_argument('--batch-size',
+                        type=int,
+                        default=4,
+                        help='batch size of training')
+    parser.add_argument('--lr',
+                        type=float,
+                        default=0.001,
+                        help='learning rate')
+    parser.add_argument('--size',
+                        type=int,
+                        default=400,
+                        help='Size of training samples')
+    parser.add_argument('--backbone',
+                        type=str,
+                        choices=['resnet50'],
+                        default='resnet50',
+                        help='backbone of semantic segmentation model')
+    parser.add_argument('--dataset',
+                        type=str,
+                        default='pascal',
+                        choices=['pascal'],
+                        help='training dataset')
+    parser.add_argument('--train_datapath',
+                        type=str,
+                        default='./data/VOCdevkit',
+                        help='The path of training dataset')
+
+    parser.add_argument('--shot',
+                        type=int,
+                        default=1,
+                        help='number of support pairs')
+    parser.add_argument('--seed',
+                        type=int,
+                        default=0,
+                        help='random seed to generate tesing samples')
+    parser.add_argument('--checkpoint_path',
+                        type=str,
+                        default='./outdir/models/Ori_SSP_trained_on_VOC.pth',
+                        help='Checkpoint trained from original SSP that has not involved in adapter')
+
+    parser.add_argument('--test_datapath',
+                        type=str,
+                        default='./data/chest',
+                        help='The path of the benchmark')
+    parser.add_argument('--benchmark',
+                        type=str,
+                        default='lung',
+                        help = 'The benchmark to be tested')
+    parser.add_argument('--global_noise_std',
+                        type=float,
+                        default=1.0)
+    parser.add_argument('--local_noise_std',
+                        type=float,
+                        default=0.75)
+    args = parser.parse_args()
+    return args
+
+
+def main():
+    args = parse_args()
+    print('\n' + str(args))
+
+    save_path = 'outdir/models/%s' % (args.dataset)
+    os.makedirs(save_path, exist_ok=True)
+
+    FSSDataset.initialize(img_size=args.size, datapath=args.train_datapath)
+    trainloader = FSSDataset.build_dataloader(args.dataset, args.batch_size, 4, 'trn', args.shot)
+    FSSDataset.initialize(img_size=args.size, datapath=args.test_datapath)
+    dataloader_val = FSSDataset.build_dataloader(args.benchmark, 15, 0, 'test', args.shot)
+    dim_ls = [128, 256, 512]  ## The output channels of feature map for the first three stages
+
+    model = SSP_MatchingNet(args.backbone,dim_ls,args.local_noise_std)
+
+    x_param_loss=nn.L1Loss()
+    criterion = CrossEntropyLoss(ignore_index=255)
+    optimizer = SGD([param for param in model.parameters() if param.requires_grad],
+                    lr=args.lr, momentum=0.9, weight_decay=5e-4)
+
+    checkpoint = torch.load(args.checkpoint_path)
+    model.load_state_dict(checkpoint,strict=False)
+
+    model = DataParallel(model).cuda()
+
+    previous_best = 0
+    Logger.initialize()
+
+    datum_center_ls = []
+    for epoch in range(5):
+
+        print("\n==> Epoch %i, learning rate = %.5f\t\t\t\t Previous best = %.2f"
+              % (epoch, optimizer.param_groups[0]["lr"], previous_best))
+
+        global_noise_ls = []
+        for dim in dim_ls:
+            ones_mat = torch.ones((args.batch_size, dim, 1, 1))
+            zeros_mat = torch.zeros((args.batch_size, dim, 1, 1))
+            alpha = torch.normal(zeros_mat, args.global_noise_std * ones_mat).cuda()  # size: B, 1, C
+            beta = torch.normal(zeros_mat, args.global_noise_std * ones_mat).cuda()  # size: B, 1, C
+            pert = (alpha, beta)
+            global_noise_ls.append(pert)
+        model.train()
+
+        total_loss = 0.0
+
+        tbar = tqdm(trainloader)
+        set_seed(args.seed)
+        for idx, batch in enumerate(tbar):
+            sup_rgb = batch['support_imgs'].squeeze().cuda()
+            sup_msk = batch['support_masks'].long().squeeze().cuda()
+            qry_rgb = batch['query_img'].cuda()
+            qry_msk = batch['query_mask'].long().cuda()
+            if epoch == 0:
+                with torch.no_grad():  # Obtain the global statistical value for better Momentum update when epoch is 0
+                    out_ls = model([sup_rgb], [sup_msk], qry_rgb, qry_msk, training=True, get_prot=True)
+            else:
+                out_ls = model([sup_rgb], [sup_msk], qry_rgb, qry_msk, training=True,global_noise_ls=global_noise_ls,
+                                   datum_center_ls=datum_center_ls)
+            mask_s = torch.cat([sup_msk], dim=0)
+
+            x_style = out_ls[-1]
+            for num in range(len(x_style)):
+                current_center = x_style[num][0].mean(dim=0, keepdim=True)
+                current_var = x_style[num][1].mean(dim=0, keepdim=True)
+                if len(datum_center_ls)<len(dim_ls):
+                    datum_center = current_center
+                    datum_var = current_var
+                    datum_center_ls.append([datum_center,datum_var])
+                else:
+                    datum_center_ls[num][0] = datum_center_ls[num][0] * 0.99 + 0.01 * current_center
+                    datum_center_ls[num][1] = datum_center_ls[num][1] * 0.99 + 0.01 * current_var
+
+            if epoch==0:
+                continue
+
+            x_param_ls = torch.zeros(1).cuda()
+            if len(out_ls[-2])>0:
+                for num in range(len(out_ls[-2])):
+                    x_ori_mean, x_ori_var, x_new_mean, x_new_var,x_new_rect_mean,x_new_rect_var = out_ls[-2][num]
+                    x_param_ls += (x_param_loss(x_ori_mean,x_new_mean) + x_param_loss(x_ori_var,x_new_var)+
+                                  x_param_loss(x_ori_mean,x_new_rect_mean) + x_param_loss(x_ori_var,x_new_rect_var))
+                x_param_ls = x_param_ls / len(out_ls[-2])
+
+            loss = criterion(out_ls[0], qry_msk) + criterion(out_ls[1], qry_msk) + criterion(out_ls[2], mask_s) * 0.2
+            loss += (2 * x_param_ls[0])
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+            tbar.set_description('Loss:%.2f' % (total_loss / (idx + 1)))
+        # if epoch in [3,4]:
+        #     optimizer.param_groups[0]['lr'] /= 10.0
+        if epoch==0:
+            continue
+
+        model.eval()
+        set_seed(args.seed)
+        with torch.no_grad():
+            test_miou, test_fb_iou = Compute_iou(model, dataloader_val, args.shot)
+        Logger.info('mIoU: %5.2f \t FB-IoU: %5.2f' % (test_miou.item(), test_fb_iou.item()))
+
+
+        if test_miou >= previous_best:
+            best_model = deepcopy(model)
+            previous_best = test_miou
+            torch.save(best_model.module.state_dict(),os.path.join(save_path, 'best_model.pth'))
+
+        torch.save(model.module.state_dict(),os.path.join(save_path, 'last_model.pth'))
+
+if __name__ == '__main__':
+    main()
+
+File Path: model/SSP_matching.py
+Content:
+import model.resnet as resnet
+
+import torch
+from torch import nn
+import torch.nn.functional as F
+import pdb
+import random
+
+
+class LayerNorm2d(nn.Module):
+    def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight[:, None, None] * x + self.bias[:, None, None]
+        return x
+
+
+class SSP_MatchingNet(nn.Module):
+    def __init__(self, backbone, dim_ls, local_noise_std=0.75):
+        super(SSP_MatchingNet, self).__init__()
+        backbone = resnet.__dict__[backbone](pretrained=True)
+
+        self.layer0 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool)
+        self.layer1, self.layer2, self.layer3 = backbone.layer1, backbone.layer2, backbone.layer3
+        self.layer_block = [self.layer0, self.layer1, self.layer2, self.layer3]
+
+        self.local_noise_std = local_noise_std
+
+        self.perturb_layers_idx = {}
+        self.perturb_layers = [0, 1, 2]
+        self.perturb_layer_dim = dim_ls
+
+        self.DR_Adapter = nn.ModuleList()
+
+        for idx, layer in enumerate(self.perturb_layers):
+            self.perturb_layers_idx[layer] = idx
+            Adapter = nn.Sequential(
+                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,
+                          dilation=2),
+                LayerNorm2d(self.perturb_layer_dim[idx]),
+                nn.ReLU(),
+                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,
+                          dilation=2),
+                LayerNorm2d(self.perturb_layer_dim[idx]),
+                nn.ReLU(),
+                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,
+                          dilation=2),
+            )
+            self.DR_Adapter.append(Adapter)
+
+    def forward(self, img_s_list, mask_s_list, img_q, mask_q, training=True, global_noise_ls=[], datum_center_ls=[],
+                get_prot=False):
+        h, w = img_q.shape[-2:]
+        if training:
+            p_local = random.random()
+            p_global = random.random()
+        else:
+            p_local = 1
+            p_global = 1
+        # feature maps of support images
+        feature_s_list = []
+
+        x_params = []
+        s_0 = img_s_list[0]
+        q_0 = img_q
+        x_layer_style = []
+        x_ori_vec = []
+        for idx, layer in enumerate(self.layer_block):
+            s_0 = layer(s_0)
+            q_0 = layer(q_0)
+            ## domain rectifying 
+            if idx in self.perturb_layers:
+                x_q_mean = q_0.mean(dim=(2, 3), keepdim=True).detach()
+                x_s_mean = s_0.mean(dim=(2, 3), keepdim=True).detach()
+                x_q_var = q_0.var(dim=(2, 3), keepdim=True).detach()
+                x_s_var = s_0.var(dim=(2, 3), keepdim=True).detach()
+                x_ori_mean = torch.cat((x_q_mean, x_s_mean), dim=0)
+                x_ori_var = torch.cat((x_q_var, x_s_var), dim=0)
+                x_layer_style.append([x_ori_mean, x_ori_var])   ## Obtain original style for global momentum update
+                if get_prot:
+                    continue
+
+                x_q_disturb = q_0
+                x_s_disturb = s_0
+                flag = 0        ## flag == 1 : perturbation
+                if training:
+                    if p_local < 0.5:  # local perturb
+                        x_q_disturb, x_s_disturb, alpha, beta = self.local_perturb(x_q_disturb,x_s_disturb)
+                        flag = 1
+                    if p_global < 0.5:  # global perturb
+                        global_noise_alpha, global_noise_beta = global_noise_ls[self.perturb_layers_idx[idx]]
+                        x_q_disturb, x_s_disturb, datum_center, datum_var = self.global_perturb(x_q_disturb, x_s_disturb,
+                                                   global_noise_alpha, global_noise_beta, datum_center_ls, idx, x_layer_style)
+                        flag = 1
+
+                x_q_disturb_miu = x_q_disturb.mean(dim=(2, 3), keepdim=True)
+                x_q_disturb_sigma = x_q_disturb.var(dim=(2, 3), keepdim=True)
+                x_s_disturb_miu = x_s_disturb.mean(dim=(2, 3), keepdim=True)
+                x_s_disturb_sigma = x_s_disturb.var(dim=(2, 3), keepdim=True)
+                dist_statistics = (x_q_disturb_miu,x_q_disturb_sigma,x_s_disturb_miu, x_s_disturb_sigma)
+
+                if (flag == 1) or (training == False):
+                    x_q_rectify, x_s_rectify, x_q_rect_miu, x_q_rect_sigma, x_s_rect_miu, x_s_rect_sigma = self.domain_rectify(x_q_disturb, x_s_disturb,idx,dist_statistics)
+                    q_0 = x_q_rectify
+                    s_0 = x_s_rectify
+
+                if training:
+                    ## prepare for cyclic align loss
+                    if flag == 1:
+                        if p_local < 0.5:
+                            second_rect_q_miu, second_rect_q_sigma = self.cyclic_rectify(idx, alpha, beta, x_q_rect_miu,
+                                                                                         x_q_rect_sigma,q_0 )
+                            second_rect_s_miu, second_rect_s_sigma = self.cyclic_rectify(idx, alpha, beta, x_s_rect_miu,
+                                                                                         x_s_rect_sigma, s_0)
+                        elif p_global < 0.5:
+                            second_rect_q_miu, second_rect_q_sigma = self.cyclic_rectify(idx, global_noise_alpha,
+                                                                                         global_noise_beta, x_q_rect_miu, x_q_rect_sigma, q_0)
+                            second_rect_s_miu, second_rect_s_sigma = self.cyclic_rectify(idx, global_noise_alpha,
+                                                                                         global_noise_beta, x_s_rect_miu, x_s_rect_sigma, s_0)
+                            x_ori_mean = torch.cat((datum_center, datum_center), dim=0)
+                            x_ori_var = torch.cat((datum_var, datum_var), dim=0)
+
+                        second_rect_mean = torch.cat((second_rect_q_miu, second_rect_s_miu), dim=0)
+                        second_rect_sigma = torch.cat((second_rect_q_sigma, second_rect_s_sigma),
+                                                   dim=0)
+
+                        first_rect_mean = torch.cat((x_q_rect_miu, x_s_rect_miu), dim=0)
+                        first_rect_sigma = torch.cat((x_q_rect_sigma, x_s_rect_sigma), dim=0)
+
+                        x_param = (x_ori_mean, x_ori_var, first_rect_mean, first_rect_sigma, second_rect_mean, second_rect_sigma)
+                        x_params.append(x_param)
+
+        feature_q = q_0
+        feature_s_list.append(s_0)
+
+        # foreground(target class) and background prototypes pooled from K support features
+        feature_fg_list = []
+        feature_bg_list = []
+        supp_out_ls = []
+        for k in range(len(img_s_list)):
+            feature_fg = self.masked_average_pooling(feature_s_list[k],
+                                                     (mask_s_list[k] == 1).float())[None, :]
+            feature_bg = self.masked_average_pooling(feature_s_list[k],
+                                                     (mask_s_list[k] == 0).float())[None, :]
+            feature_fg_list.append(feature_fg)
+            feature_bg_list.append(feature_bg)
+
+            if self.training:
+                supp_similarity_fg = F.cosine_similarity(feature_s_list[k], feature_fg.squeeze(0)[..., None, None],
+                                                         dim=1)
+                supp_similarity_bg = F.cosine_similarity(feature_s_list[k], feature_bg.squeeze(0)[..., None, None],
+                                                         dim=1)
+                supp_out = torch.cat((supp_similarity_bg[:, None, ...], supp_similarity_fg[:, None, ...]), dim=1) * 10.0
+
+                supp_out = F.interpolate(supp_out, size=(h, w), mode="bilinear", align_corners=True)
+                supp_out_ls.append(supp_out)
+
+        # average K foreground prototypes and K background prototypes
+        FP = torch.mean(torch.cat(feature_fg_list, dim=0), dim=0).unsqueeze(-1).unsqueeze(-1)
+        BP = torch.mean(torch.cat(feature_bg_list, dim=0), dim=0).unsqueeze(-1).unsqueeze(-1)
+
+        # measure the similarity of query features to fg/bg prototypes
+        out_0 = self.similarity_func(feature_q, FP, BP)
+
+        SSFP_1, SSBP_1, ASFP_1, ASBP_1 = self.SSP_func(feature_q, out_0)
+
+        FP_1 = FP * 0.5 + SSFP_1 * 0.5
+        BP_1 = SSBP_1 * 0.3 + ASBP_1 * 0.7
+
+        out_1 = self.similarity_func(feature_q, FP_1, BP_1)
+
+        out_1 = F.interpolate(out_1, size=(h, w), mode="bilinear", align_corners=True)
+
+        out_ls = [out_1]
+
+        if self.training:
+            fg_q = self.masked_average_pooling(feature_q, (mask_q == 1).float())[None, :].squeeze(0)
+            bg_q = self.masked_average_pooling(feature_q, (mask_q == 0).float())[None, :].squeeze(0)
+
+            self_similarity_fg = F.cosine_similarity(feature_q, fg_q[..., None, None], dim=1)
+            self_similarity_bg = F.cosine_similarity(feature_q, bg_q[..., None, None], dim=1)
+            self_out = torch.cat((self_similarity_bg[:, None, ...], self_similarity_fg[:, None, ...]), dim=1) * 10.0
+
+            self_out = F.interpolate(self_out, size=(h, w), mode="bilinear", align_corners=True)
+            supp_out = torch.cat(supp_out_ls, 0)
+            out_ls.append(self_out)
+            out_ls.append(supp_out)
+
+        out_ls.append(x_ori_vec)
+        out_ls.append(x_params)
+        out_ls.append(x_layer_style)
+
+        return out_ls
+
+    def cyclic_rectify(self,idx, alpha, beta, x_rect_miu, x_rect_sigma, feature):
+
+        second_dist_mean = (1 + beta) * x_rect_miu
+        second_dist_sigma = (1 + alpha) * x_rect_sigma
+
+        second_dist = ((feature - x_rect_miu) / (
+                1e-6 + x_rect_sigma)) * second_dist_sigma + second_dist_mean
+
+        second_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](second_dist.detach())
+        second_rect_beta = second_rect.mean(dim=(2, 3), keepdim=True)
+        second_rect_alpha = second_rect.var(dim=(2, 3), keepdim=True)
+
+        second_rect_miu = (1 + second_rect_beta) * second_dist_mean
+        second_rect_sigma = (1 + second_rect_alpha) * second_dist_sigma
+
+        return second_rect_miu, second_rect_sigma   #get cyclic rectifying statistics
+
+
+    def local_perturb(self, x_q_disturb, x_s_disturb):
+        zeros_mat = torch.zeros(x_q_disturb.mean(dim=(2, 3), keepdim=True).shape)
+        ones_mat = torch.ones(x_q_disturb.mean(dim=(2, 3), keepdim=True).shape)
+        alpha = torch.normal(zeros_mat, self.local_noise_std * ones_mat).cuda()  # size: B, 1, 1, C
+        beta = torch.normal(zeros_mat, self.local_noise_std * ones_mat).cuda()  # size: B, 1, 1, C
+
+        local_x_q_disturb = ((1 + alpha) * x_q_disturb - alpha * x_q_disturb.mean(dim=(2, 3),
+                            keepdim=True) + beta * x_q_disturb.mean(dim=(2, 3), keepdim=True))
+
+        local_x_s_disturb = ((1 + alpha) * x_s_disturb - alpha * x_s_disturb.mean(dim=(2, 3),
+                            keepdim=True) + beta * x_s_disturb.mean(dim=(2, 3), keepdim=True))
+
+        return local_x_q_disturb, local_x_s_disturb, alpha, beta
+
+    def global_perturb(self, x_q_disturb, x_s_disturb, global_noise_alpha,global_noise_beta, datum_center_ls,idx, x_layer_style):
+        if len(datum_center_ls) > 0:
+            datum_center, datum_var = datum_center_ls[self.perturb_layers_idx[idx]]
+        else:
+            datum_center, datum_var = x_layer_style[self.perturb_layers_idx[idx]]
+            datum_center = datum_center.mean(dim=0, keepdim=True)
+            datum_var = datum_var.mean(dim=0, keepdim=True)
+
+        datum_center = datum_center.repeat(len(x_q_disturb), 1, 1, 1).detach()
+        datum_var = datum_var.repeat(len(x_s_disturb), 1, 1, 1).detach()
+
+        global_x_s_disturb = (1 + global_noise_alpha) * x_s_disturb - global_noise_alpha * datum_center + global_noise_beta * datum_center
+        global_x_q_disturb = (1 + global_noise_alpha) * x_q_disturb - global_noise_alpha * datum_center + global_noise_beta * datum_center
+
+        return global_x_q_disturb, global_x_s_disturb, datum_center, datum_var
+
+    def domain_rectify(self, x_q_disturb, x_s_disturb, idx, dist_statistics):
+        x_q_disturb_miu, x_q_disturb_sigma, x_s_disturb_miu, x_s_disturb_sigma = dist_statistics
+
+        x_q_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](x_q_disturb.detach())
+
+        x_q_rect_beta = x_q_rect.mean(dim=(2, 3), keepdim=True)  ##[bs*2,1,768]
+        x_q_rect_alpha = x_q_rect.var(dim=(2, 3), keepdim=True)
+
+        x_q_rect_miu = (1 + x_q_rect_beta) * x_q_disturb_miu
+        x_q_rect_sigma = (1 + x_q_rect_alpha) * x_q_disturb_sigma
+        x_q_rectify = ((x_q_disturb - x_q_disturb_miu) / (
+                1e-6 + x_q_disturb_sigma)) * x_q_rect_sigma + x_q_rect_miu
+
+        x_s_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](x_s_disturb.detach())
+
+        x_s_rect_beta = x_s_rect.mean(dim=(2, 3), keepdim=True)
+        x_s_rect_alpha = x_s_rect.var(dim=(2, 3), keepdim=True)
+
+        x_s_rect_miu = ((1 + x_s_rect_beta)) * x_s_disturb_miu
+        x_s_rect_sigma = ((1 + x_s_rect_alpha)) * x_s_disturb_sigma
+        x_s_rectify = ((x_s_disturb - x_s_disturb_miu) / (
+                1e-6 + x_s_disturb_sigma)) * x_s_rect_sigma + x_s_rect_miu
+
+        return x_q_rectify, x_s_rectify, x_q_rect_miu, x_q_rect_sigma, x_s_rect_miu, x_s_rect_sigma
+
+    def SSP_func(self, feature_q, out):
+        bs = feature_q.shape[0]
+        pred_1 = out.softmax(1)
+        pred_1 = pred_1.view(bs, 2, -1)
+        pred_fg = pred_1[:, 1]
+        pred_bg = pred_1[:, 0]
+        fg_ls = []
+        bg_ls = []
+        fg_local_ls = []
+        bg_local_ls = []
+        for epi in range(bs):
+            fg_thres = 0.7  # 0.9 #0.6
+            bg_thres = 0.6  # 0.6
+            cur_feat = feature_q[epi].view(1024, -1)
+            f_h, f_w = feature_q[epi].shape[-2:]
+            if (pred_fg[epi] > fg_thres).sum() > 0:
+                fg_feat = cur_feat[:, (pred_fg[epi] > fg_thres)]
+            else:
+                fg_feat = cur_feat[:, torch.topk(pred_fg[epi], 12).indices]
+            if (pred_bg[epi] > bg_thres).sum() > 0:
+                bg_feat = cur_feat[:, (pred_bg[epi] > bg_thres)]
+            else:
+                bg_feat = cur_feat[:, torch.topk(pred_bg[epi], 12).indices]
+            # global proto
+            fg_proto = fg_feat.mean(-1)
+            bg_proto = bg_feat.mean(-1)
+            fg_ls.append(fg_proto.unsqueeze(0))
+            bg_ls.append(bg_proto.unsqueeze(0))
+
+            # local proto
+            fg_feat_norm = fg_feat / torch.norm(fg_feat, 2, 0, True)
+            bg_feat_norm = bg_feat / torch.norm(bg_feat, 2, 0, True)
+            cur_feat_norm = cur_feat / torch.norm(cur_feat, 2, 0, True)
+
+            cur_feat_norm_t = cur_feat_norm.t()  # N3, 1024
+            fg_sim = torch.matmul(cur_feat_norm_t, fg_feat_norm) * 2.0
+            bg_sim = torch.matmul(cur_feat_norm_t, bg_feat_norm) * 2.0
+
+            fg_sim = fg_sim.softmax(-1)
+            bg_sim = bg_sim.softmax(-1)
+
+            fg_proto_local = torch.matmul(fg_sim, fg_feat.t())
+            bg_proto_local = torch.matmul(bg_sim, bg_feat.t())
+
+            fg_proto_local = fg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0)
+            bg_proto_local = bg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0)
+
+            fg_local_ls.append(fg_proto_local)
+            bg_local_ls.append(bg_proto_local)
+
+        # global proto
+        new_fg = torch.cat(fg_ls, 0).unsqueeze(-1).unsqueeze(-1)
+        new_bg = torch.cat(bg_ls, 0).unsqueeze(-1).unsqueeze(-1)
+
+        # local proto
+        new_fg_local = torch.cat(fg_local_ls, 0).unsqueeze(-1).unsqueeze(-1)
+        new_bg_local = torch.cat(bg_local_ls, 0)
+
+        return new_fg, new_bg, new_fg_local, new_bg_local
+
+    def similarity_func(self, feature_q, fg_proto, bg_proto):
+        similarity_fg = F.cosine_similarity(feature_q, fg_proto, dim=1)
+        similarity_bg = F.cosine_similarity(feature_q, bg_proto, dim=1)
+
+        out = torch.cat((similarity_bg[:, None, ...], similarity_fg[:, None, ...]), dim=1) * 10.0
+        return out
+
+    def masked_average_pooling(self, feature, mask):
+        mask = F.interpolate(mask.unsqueeze(1), size=feature.shape[-2:], mode='bilinear', align_corners=True)
+        masked_feature = torch.sum(feature * mask, dim=(2, 3)) \
+                         / (mask.sum(dim=(2, 3)) + 1e-5)
+        return masked_feature
+
+File Path: model/resnet.py
+Content:
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+__all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']
+
+
+def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                     padding=dilation, groups=groups, bias=False, dilation=dilation)
+
+
+def conv1x1(in_planes, out_planes, stride=1):
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
+                 base_width=64, dilation=1, norm_layer=None):
+        super(BasicBlock, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        if groups != 1 or base_width != 64:
+            raise ValueError('BasicBlock only supports groups=1 and base_width=64')
+        if dilation > 1:
+            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+
+        self.conv1 = conv3x3(inplanes, planes, stride)
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = conv3x3(planes, planes)
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
+                 base_width=64, dilation=1, norm_layer=None, last_relu=True):
+        super(Bottleneck, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        width = int(planes * (base_width / 64.)) * groups
+
+        self.conv1 = conv1x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.conv2 = conv3x3(width, width, stride, groups, dilation)
+        self.bn2 = norm_layer(width)
+        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stride = stride
+        self.last_relu = last_relu
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        if self.last_relu:
+            out = self.relu(out)
+
+        return out
+
+
+class ResNet(nn.Module):
+
+    def __init__(self, block, layers, zero_init_residual=False, groups=1,
+                 width_per_group=64, replace_stride_with_dilation=None, norm_layer=None):
+        super(ResNet, self).__init__()
+
+        self.out_channels = block.expansion * 256
+
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        self._norm_layer = norm_layer
+
+        self.inplanes = 128
+        self.dilation = 1
+        if replace_stride_with_dilation is None:
+            replace_stride_with_dilation = [False, False, False]
+        if len(replace_stride_with_dilation) != 3:
+            raise ValueError("replace_stride_with_dilation should be None "
+                             "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
+        self.groups = groups
+        self.base_width = width_per_group
+
+        self.conv1 = nn.Sequential(
+            conv3x3(3, 64, stride=2),
+            norm_layer(64),
+            nn.ReLU(inplace=True),
+            conv3x3(64, 64),
+            norm_layer(64),
+            nn.ReLU(inplace=True),
+            conv3x3(64, 128)
+        )
+        self.bn1 = norm_layer(128)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2,
+                                       dilate=replace_stride_with_dilation[0])
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2,
+                                       dilate=replace_stride_with_dilation[1], last_relu=False)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck):
+                    nn.init.constant_(m.bn3.weight, 0)
+                elif isinstance(m, BasicBlock):
+                    nn.init.constant_(m.bn2.weight, 0)
+
+    def _make_layer(self, block, planes, blocks, stride=1, dilate=False, last_relu=True):
+        """
+        :param last_relu: in metric learning paradigm, the final relu is removed (last_relu = False)
+        """
+        norm_layer = self._norm_layer
+        downsample = None
+        previous_dilation = self.dilation
+        if dilate:
+            self.dilation *= stride
+            stride = 1
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion),
+            )
+
+        layers = list()
+        layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
+                            self.base_width, previous_dilation, norm_layer))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            use_relu = True if i != blocks - 1 else last_relu
+            layers.append(block(self.inplanes, planes, groups=self.groups,
+                                base_width=self.base_width, dilation=self.dilation,
+                                norm_layer=norm_layer, last_relu=use_relu))
+
+        return nn.Sequential(*layers)
+
+    def base_forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        c1 = self.layer1(x)
+        c2 = self.layer2(c1)
+        c3 = self.layer3(c2)
+
+        return c3
+
+
+def _resnet(arch, block, layers, pretrained, **kwargs):
+    model = ResNet(block, layers, **kwargs)
+    if pretrained:
+        state_dict = torch.load("./outdir/models/pretrained/%s.pth" % arch)
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def resnet18(pretrained=False):
+    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained)
+
+
+def resnet34(pretrained=False):
+    return _resnet('resnet34', BasicBlock, [3, 4, 6, 3], pretrained)
+
+
+def resnet50(pretrained=False):
+    return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained,
+                   replace_stride_with_dilation=[False, True, True])
+
+
+def resnet101(pretrained=False):
+    return _resnet('resnet101', Bottleneck, [3, 4, 23, 3], pretrained,
+                   replace_stride_with_dilation=[False, True, True])
+
+
+def resnet152(pretrained=False):
+    return _resnet('resnet152', Bottleneck, [3, 8, 36, 3], pretrained,
+                   replace_stride_with_dilation=[False, True, True])
+
+File Path: test.py
+Content:
+import glob
+import numpy as np
+import torch
+from PIL import Image
+from common.logger import Logger, AverageMeter
+from model.SSP_matching import SSP_MatchingNet
+
+import torch.nn as nn
+from data_util.datasets import FSSDataset
+from common import utils
+import argparse
+from common.evaluation import Evaluator
+from util.utils import Compute_iou
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Domain-Rectifying Adapter for CD-FSS')
+    parser.add_argument('--dataset',
+                        type=str,
+                        default='pascal',
+                        choices=['pascal'],
+                        help='training dataset')
+    parser.add_argument('--backbone',
+                        type=str,
+                        default='resnet50',
+                        help='backbone of semantic segmentation model')
+    parser.add_argument('--nshot',
+                        type=int,
+                        default=1,
+                        help='number of support pairs')
+    parser.add_argument('--benchmark',
+                        type=str,
+                        default='fss',
+                        choices=['fss','deepglobe','lung','isic'],
+                        help='The benchmark to be tested')
+    parser.add_argument('--test_datapath',
+                        type=str,
+                        default='./data/fss',
+                        help='The path to the benchmark dataset')
+    parser.add_argument('--checkpoint_path',
+                        type=str,
+                        default='./outdir/models/pascal/best_model.pth',
+                        help='Checkpoint path')
+
+    args = parser.parse_args()
+    return args
+
+
+def test(model, dataloader, nshot):
+    # Freeze randomness during testing for reproducibility if needed
+    utils.fix_randseed(0)
+    average_meter = AverageMeter(dataloader.dataset)
+
+    for idx, batch in enumerate(dataloader):
+
+        batch = utils.to_cuda(batch)
+
+        sup_rgb = batch['support_imgs'][0]
+        sup_msk = batch['support_masks'][0]
+        qry_rgb = batch['query_img']
+        qry_msk = batch['query_mask']
+
+
+        pred = model([sup_rgb],[sup_msk] , qry_rgb, qry_msk, training=False)[0]
+        pred_mask = torch.argmax(pred, dim=1)
+
+        assert pred_mask.size() == batch['query_mask'].size()
+        # Evaluate prediction
+        area_inter, area_union = Evaluator.classify_prediction(pred_mask.clone(), batch)
+        average_meter.update(area_inter, area_union, batch['class_id'], loss=None)
+        average_meter.write_process(idx, len(dataloader), epoch=-1, write_batch_idx=1)
+
+    # Write evaluation results
+    average_meter.write_result('Test', 0)
+    miou, fb_iou = average_meter.compute_iou()
+
+    return miou, fb_iou
+
+def main(args):
+    Logger.initialize()
+    FSSDataset.initialize(img_size=400, datapath=args.test_datapath)
+    dataloader_test = FSSDataset.build_dataloader(args.benchmark, 1, 0, 'test', args.nshot)
+
+    Logger.info(f'     ==> {len(dataloader_test)} testing samples')
+    dim_ls = [128, 256, 512]
+    model = SSP_MatchingNet(args.backbone,dim_ls)
+
+    checkpoint = torch.load(args.checkpoint_path)
+    model.load_state_dict(checkpoint,strict=False)
+    model.eval()
+    Logger.log_params(model)
+
+    # Device setup
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    Logger.info('# available GPUs: %d' % torch.cuda.device_count())
+    model = nn.DataParallel(model)
+    model.to(device)
+
+    Evaluator.initialize()
+
+    with torch.no_grad():
+        test_miou, test_fb_iou = test(model, dataloader_test, args.nshot)
+    Logger.info('mIoU: %5.2f \t FB-IoU: %5.2f' % (test_miou.item(), test_fb_iou.item()))
+    Logger.info('==================== Finished Testing ====================')
+
+
+
+if __name__ == '__main__':
+
+    args = parse_args()
+    main(args)
+
+File Path: util/utils.py
+Content:
+import numpy as np
+import random
+import torch
+import os
+from common import utils
+from common.logger import  AverageMeter
+from common.evaluation import Evaluator
+
+def count_params(model):
+    param_num = sum(p.numel() for p in model.parameters())
+    return param_num / 1e6
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+def Compute_iou(model, dataloader, nshot):
+
+
+    utils.fix_randseed(0)
+    average_meter = AverageMeter(dataloader.dataset)
+
+    for idx, batch in enumerate(dataloader):
+        batch = utils.to_cuda(batch)
+
+        sup_rgb = batch['support_imgs'].squeeze()
+        sup_msk = batch['support_masks'].squeeze()
+        qry_rgb = batch['query_img']
+        qry_msk = batch['query_mask']
+
+        pred = model([sup_rgb],[sup_msk] , qry_rgb, qry_msk, training=False)[0]
+        pred_mask = torch.argmax(pred, dim=1)
+
+        assert pred_mask.size() == batch['query_mask'].size()
+        # Evaluate prediction
+        area_inter, area_union = Evaluator.classify_prediction(pred_mask.clone(), batch)
+        average_meter.update(area_inter, area_union, batch['class_id'], loss=None)
+        average_meter.write_process(idx, len(dataloader), epoch=-1, write_batch_idx=1)
+
+    # Write evaluation results
+    average_meter.write_result('Test', 0)
+    miou, fb_iou = average_meter.compute_iou()
+
+    return miou, fb_iou
+
+class mIOU:
+    def __init__(self, num_classes):
+        self.num_classes = num_classes
+        self.hist = np.zeros((num_classes, num_classes))
+
+    def _fast_hist(self, label_pred, label_true):
+        mask = (label_true >= 0) & (label_true < self.num_classes)
+        hist = np.bincount(
+            self.num_classes * label_true[mask].astype(int) +
+            label_pred[mask], minlength=self.num_classes ** 2).reshape(self.num_classes, self.num_classes)
+        return hist
+
+    def add_batch(self, predictions, gts):
+        for lp, lt in zip(predictions, gts):
+            self.hist += self._fast_hist(lp.flatten(), lt.flatten())
+
+    def evaluate(self):
+        iu = np.diag(self.hist) / (self.hist.sum(axis=1) + self.hist.sum(axis=0) - np.diag(self.hist))
+        return np.nanmean(iu[1:])
+
+Output:
+{
+    "experimental_code": "import model.resnet as resnet\n\nimport torch\nfrom torch import nn\nimport torch.nn.functional as F\nimport pdb\nimport random\n\n\nclass LayerNorm2d(nn.Module):\n    def __init__(self, num_channels: int, eps: float = 1e-6) -> None:\n        super().__init__()\n        self.weight = nn.Parameter(torch.ones(num_channels))\n        self.bias = nn.Parameter(torch.zeros(num_channels))\n        self.eps = eps\n\n    def forward(self, x: torch.Tensor) -> torch.Tensor:\n        u = x.mean(1, keepdim=True)\n        s = (x - u).pow(2).mean(1, keepdim=True)\n        x = (x - u) / torch.sqrt(s + self.eps)\n        x = self.weight[:, None, None] * x + self.bias[:, None, None]\n        return x\n\n\nclass SSP_MatchingNet(nn.Module):\n    def __init__(self, backbone, dim_ls, local_noise_std=0.75):\n        super(SSP_MatchingNet, self).__init__()\n        backbone = resnet.__dict__[backbone](pretrained=True)\n\n        self.layer0 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu, backbone.maxpool)\n        self.layer1, self.layer2, self.layer3 = backbone.layer1, backbone.layer2, backbone.layer3\n        self.layer_block = [self.layer0, self.layer1, self.layer2, self.layer3]\n\n        self.local_noise_std = local_noise_std\n\n        self.perturb_layers_idx = {}\n        self.perturb_layers = [0, 1, 2]\n        self.perturb_layer_dim = dim_ls\n\n        self.DR_Adapter = nn.ModuleList()\n\n        for idx, layer in enumerate(self.perturb_layers):\n            self.perturb_layers_idx[layer] = idx\n            Adapter = nn.Sequential(\n                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,\n                          dilation=2),\n                LayerNorm2d(self.perturb_layer_dim[idx]),\n                nn.ReLU(),\n                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,\n                          dilation=2),\n                LayerNorm2d(self.perturb_layer_dim[idx]),\n                nn.ReLU(),\n                nn.Conv2d(self.perturb_layer_dim[idx], self.perturb_layer_dim[idx], kernel_size=7, stride=1,\n                          dilation=2),\n            )\n            self.DR_Adapter.append(Adapter)\n\n    def forward(self, img_s_list, mask_s_list, img_q, mask_q, training=True, global_noise_ls=[], datum_center_ls=[],\n                get_prot=False):\n        h, w = img_q.shape[-2:]\n        if training:\n            p_local = random.random()\n            p_global = random.random()\n        else:\n            p_local = 1\n            p_global = 1\n        # feature maps of support images\n        feature_s_list = []\n\n        x_params = []\n        s_0 = img_s_list[0]\n        q_0 = img_q\n        x_layer_style = []\n        x_ori_vec = []\n        for idx, layer in enumerate(self.layer_block):\n            s_0 = layer(s_0)\n            q_0 = layer(q_0)\n            ## domain rectifying \n            if idx in self.perturb_layers:\n                x_q_mean = q_0.mean(dim=(2, 3), keepdim=True).detach()\n                x_s_mean = s_0.mean(dim=(2, 3), keepdim=True).detach()\n                x_q_var = q_0.var(dim=(2, 3), keepdim=True).detach()\n                x_s_var = s_0.var(dim=(2, 3), keepdim=True).detach()\n                x_ori_mean = torch.cat((x_q_mean, x_s_mean), dim=0)\n                x_ori_var = torch.cat((x_q_var, x_s_var), dim=0)\n                x_layer_style.append([x_ori_mean, x_ori_var])   ## Obtain original style for global momentum update\n                if get_prot:\n                    continue\n\n                x_q_disturb = q_0\n                x_s_disturb = s_0\n                flag = 0        ## flag == 1 : perturbation\n                if training:\n                    if p_local < 0.5:  # local perturb\n                        x_q_disturb, x_s_disturb, alpha, beta = self.local_perturb(x_q_disturb,x_s_disturb)\n                        flag = 1\n                    if p_global < 0.5:  # global perturb\n                        global_noise_alpha, global_noise_beta = global_noise_ls[self.perturb_layers_idx[idx]]\n                        x_q_disturb, x_s_disturb, datum_center, datum_var = self.global_perturb(x_q_disturb, x_s_disturb,\n                                                   global_noise_alpha, global_noise_beta, datum_center_ls, idx, x_layer_style)\n                        flag = 1\n\n                x_q_disturb_miu = x_q_disturb.mean(dim=(2, 3), keepdim=True)\n                x_q_disturb_sigma = x_q_disturb.var(dim=(2, 3), keepdim=True)\n                x_s_disturb_miu = x_s_disturb.mean(dim=(2, 3), keepdim=True)\n                x_s_disturb_sigma = x_s_disturb.var(dim=(2, 3), keepdim=True)\n                dist_statistics = (x_q_disturb_miu,x_q_disturb_sigma,x_s_disturb_miu, x_s_disturb_sigma)\n\n                if (flag == 1) or (training == False):\n                    x_q_rectify, x_s_rectify, x_q_rect_miu, x_q_rect_sigma, x_s_rect_miu, x_s_rect_sigma = self.domain_rectify(x_q_disturb, x_s_disturb,idx,dist_statistics)\n                    q_0 = x_q_rectify\n                    s_0 = x_s_rectify\n\n                if training:\n                    ## prepare for cyclic align loss\n                    if flag == 1:\n                        if p_local < 0.5:\n                            second_rect_q_miu, second_rect_q_sigma = self.cyclic_rectify(idx, alpha, beta, x_q_rect_miu,\n                                                                                         x_q_rect_sigma,q_0 )\n                            second_rect_s_miu, second_rect_s_sigma = self.cyclic_rectify(idx, alpha, beta, x_s_rect_miu,\n                                                                                         x_s_rect_sigma, s_0)\n                        elif p_global < 0.5:\n                            second_rect_q_miu, second_rect_q_sigma = self.cyclic_rectify(idx, global_noise_alpha,\n                                                                                         global_noise_beta, x_q_rect_miu, x_q_rect_sigma, q_0)\n                            second_rect_s_miu, second_rect_s_sigma = self.cyclic_rectify(idx, global_noise_alpha,\n                                                                                         global_noise_beta, x_s_rect_miu, x_s_rect_sigma, s_0)\n                            x_ori_mean = torch.cat((datum_center, datum_center), dim=0)\n                            x_ori_var = torch.cat((datum_var, datum_var), dim=0)\n\n                        second_rect_mean = torch.cat((second_rect_q_miu, second_rect_s_miu), dim=0)\n                        second_rect_sigma = torch.cat((second_rect_q_sigma, second_rect_s_sigma),\n                                                   dim=0)\n\n                        first_rect_mean = torch.cat((x_q_rect_miu, x_s_rect_miu), dim=0)\n                        first_rect_sigma = torch.cat((x_q_rect_sigma, x_s_rect_sigma), dim=0)\n\n                        x_param = (x_ori_mean, x_ori_var, first_rect_mean, first_rect_sigma, second_rect_mean, second_rect_sigma)\n                        x_params.append(x_param)\n\n        feature_q = q_0\n        feature_s_list.append(s_0)\n\n        # foreground(target class) and background prototypes pooled from K support features\n        feature_fg_list = []\n        feature_bg_list = []\n        supp_out_ls = []\n        for k in range(len(img_s_list)):\n            feature_fg = self.masked_average_pooling(feature_s_list[k],\n                                                     (mask_s_list[k] == 1).float())[None, :]\n            feature_bg = self.masked_average_pooling(feature_s_list[k],\n                                                     (mask_s_list[k] == 0).float())[None, :]\n            feature_fg_list.append(feature_fg)\n            feature_bg_list.append(feature_bg)\n\n            if self.training:\n                supp_similarity_fg = F.cosine_similarity(feature_s_list[k], feature_fg.squeeze(0)[..., None, None],\n                                                         dim=1)\n                supp_similarity_bg = F.cosine_similarity(feature_s_list[k], feature_bg.squeeze(0)[..., None, None],\n                                                         dim=1)\n                supp_out = torch.cat((supp_similarity_bg[:, None, ...], supp_similarity_fg[:, None, ...]), dim=1) * 10.0\n\n                supp_out = F.interpolate(supp_out, size=(h, w), mode=\"bilinear\", align_corners=True)\n                supp_out_ls.append(supp_out)\n\n        # average K foreground prototypes and K background prototypes\n        FP = torch.mean(torch.cat(feature_fg_list, dim=0), dim=0).unsqueeze(-1).unsqueeze(-1)\n        BP = torch.mean(torch.cat(feature_bg_list, dim=0), dim=0).unsqueeze(-1).unsqueeze(-1)\n\n        # measure the similarity of query features to fg/bg prototypes\n        out_0 = self.similarity_func(feature_q, FP, BP)\n\n        SSFP_1, SSBP_1, ASFP_1, ASBP_1 = self.SSP_func(feature_q, out_0)\n\n        FP_1 = FP * 0.5 + SSFP_1 * 0.5\n        BP_1 = SSBP_1 * 0.3 + ASBP_1 * 0.7\n\n        out_1 = self.similarity_func(feature_q, FP_1, BP_1)\n\n        out_1 = F.interpolate(out_1, size=(h, w), mode=\"bilinear\", align_corners=True)\n\n        out_ls = [out_1]\n\n        if self.training:\n            fg_q = self.masked_average_pooling(feature_q, (mask_q == 1).float())[None, :].squeeze(0)\n            bg_q = self.masked_average_pooling(feature_q, (mask_q == 0).float())[None, :].squeeze(0)\n\n            self_similarity_fg = F.cosine_similarity(feature_q, fg_q[..., None, None], dim=1)\n            self_similarity_bg = F.cosine_similarity(feature_q, bg_q[..., None, None], dim=1)\n            self_out = torch.cat((self_similarity_bg[:, None, ...], self_similarity_fg[:, None, ...]), dim=1) * 10.0\n\n            self_out = F.interpolate(self_out, size=(h, w), mode=\"bilinear\", align_corners=True)\n            supp_out = torch.cat(supp_out_ls, 0)\n            out_ls.append(self_out)\n            out_ls.append(supp_out)\n\n        out_ls.append(x_ori_vec)\n        out_ls.append(x_params)\n        out_ls.append(x_layer_style)\n\n        return out_ls\n\n    def cyclic_rectify(self,idx, alpha, beta, x_rect_miu, x_rect_sigma, feature):\n\n        second_dist_mean = (1 + beta) * x_rect_miu\n        second_dist_sigma = (1 + alpha) * x_rect_sigma\n\n        second_dist = ((feature - x_rect_miu) / (\n                1e-6 + x_rect_sigma)) * second_dist_sigma + second_dist_mean\n\n        second_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](second_dist.detach())\n        second_rect_beta = second_rect.mean(dim=(2, 3), keepdim=True)\n        second_rect_alpha = second_rect.var(dim=(2, 3), keepdim=True)\n\n        second_rect_miu = (1 + second_rect_beta) * second_dist_mean\n        second_rect_sigma = (1 + second_rect_alpha) * second_dist_sigma\n\n        return second_rect_miu, second_rect_sigma   #get cyclic rectifying statistics\n\n\n    def local_perturb(self, x_q_disturb, x_s_disturb):\n        zeros_mat = torch.zeros(x_q_disturb.mean(dim=(2, 3), keepdim=True).shape)\n        ones_mat = torch.ones(x_q_disturb.mean(dim=(2, 3), keepdim=True).shape)\n        alpha = torch.normal(zeros_mat, self.local_noise_std * ones_mat).cuda()  # size: B, 1, 1, C\n        beta = torch.normal(zeros_mat, self.local_noise_std * ones_mat).cuda()  # size: B, 1, 1, C\n\n        local_x_q_disturb = ((1 + alpha) * x_q_disturb - alpha * x_q_disturb.mean(dim=(2, 3),\n                            keepdim=True) + beta * x_q_disturb.mean(dim=(2, 3), keepdim=True))\n\n        local_x_s_disturb = ((1 + alpha) * x_s_disturb - alpha * x_s_disturb.mean(dim=(2, 3),\n                            keepdim=True) + beta * x_s_disturb.mean(dim=(2, 3), keepdim=True))\n\n        return local_x_q_disturb, local_x_s_disturb, alpha, beta\n\n    def global_perturb(self, x_q_disturb, x_s_disturb, global_noise_alpha,global_noise_beta, datum_center_ls,idx, x_layer_style):\n        if len(datum_center_ls) > 0:\n            datum_center, datum_var = datum_center_ls[self.perturb_layers_idx[idx]]\n        else:\n            datum_center, datum_var = x_layer_style[self.perturb_layers_idx[idx]]\n            datum_center = datum_center.mean(dim=0, keepdim=True)\n            datum_var = datum_var.mean(dim=0, keepdim=True)\n\n        datum_center = datum_center.repeat(len(x_q_disturb), 1, 1, 1).detach()\n        datum_var = datum_var.repeat(len(x_s_disturb), 1, 1, 1).detach()\n\n        global_x_s_disturb = (1 + global_noise_alpha) * x_s_disturb - global_noise_alpha * datum_center + global_noise_beta * datum_center\n        global_x_q_disturb = (1 + global_noise_alpha) * x_q_disturb - global_noise_alpha * datum_center + global_noise_beta * datum_center\n\n        return global_x_q_disturb, global_x_s_disturb, datum_center, datum_var\n\n    def domain_rectify(self, x_q_disturb, x_s_disturb, idx, dist_statistics):\n        x_q_disturb_miu, x_q_disturb_sigma, x_s_disturb_miu, x_s_disturb_sigma = dist_statistics\n\n        x_q_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](x_q_disturb.detach())\n\n        x_q_rect_beta = x_q_rect.mean(dim=(2, 3), keepdim=True)  ##[bs*2,1,768]\n        x_q_rect_alpha = x_q_rect.var(dim=(2, 3), keepdim=True)\n\n        x_q_rect_miu = (1 + x_q_rect_beta) * x_q_disturb_miu\n        x_q_rect_sigma = (1 + x_q_rect_alpha) * x_q_disturb_sigma\n        x_q_rectify = ((x_q_disturb - x_q_disturb_miu) / (\n                1e-6 + x_q_disturb_sigma)) * x_q_rect_sigma + x_q_rect_miu\n\n        x_s_rect = self.DR_Adapter[self.perturb_layers_idx[idx]](x_s_disturb.detach())\n\n        x_s_rect_beta = x_s_rect.mean(dim=(2, 3), keepdim=True)\n        x_s_rect_alpha = x_s_rect.var(dim=(2, 3), keepdim=True)\n\n        x_s_rect_miu = ((1 + x_s_rect_beta)) * x_s_disturb_miu\n        x_s_rect_sigma = ((1 + x_s_rect_alpha)) * x_s_disturb_sigma\n        x_s_rectify = ((x_s_disturb - x_s_disturb_miu) / (\n                1e-6 + x_s_disturb_sigma)) * x_s_rect_sigma + x_s_rect_miu\n\n        return x_q_rectify, x_s_rectify, x_q_rect_miu, x_q_rect_sigma, x_s_rect_miu, x_s_rect_sigma\n\n    def SSP_func(self, feature_q, out):\n        bs = feature_q.shape[0]\n        pred_1 = out.softmax(1)\n        pred_1 = pred_1.view(bs, 2, -1)\n        pred_fg = pred_1[:, 1]\n        pred_bg = pred_1[:, 0]\n        fg_ls = []\n        bg_ls = []\n        fg_local_ls = []\n        bg_local_ls = []\n        for epi in range(bs):\n            fg_thres = 0.7  # 0.9 #0.6\n            bg_thres = 0.6  # 0.6\n            cur_feat = feature_q[epi].view(1024, -1)\n            f_h, f_w = feature_q[epi].shape[-2:]\n            if (pred_fg[epi] > fg_thres).sum() > 0:\n                fg_feat = cur_feat[:, (pred_fg[epi] > fg_thres)]\n            else:\n                fg_feat = cur_feat[:, torch.topk(pred_fg[epi], 12).indices]\n            if (pred_bg[epi] > bg_thres).sum() > 0:\n                bg_feat = cur_feat[:, (pred_bg[epi] > bg_thres)]\n            else:\n                bg_feat = cur_feat[:, torch.topk(pred_bg[epi], 12).indices]\n            # global proto\n            fg_proto = fg_feat.mean(-1)\n            bg_proto = bg_feat.mean(-1)\n            fg_ls.append(fg_proto.unsqueeze(0))\n            bg_ls.append(bg_proto.unsqueeze(0))\n\n            # local proto\n            fg_feat_norm = fg_feat / torch.norm(fg_feat, 2, 0, True)\n            bg_feat_norm = bg_feat / torch.norm(bg_feat, 2, 0, True)\n            cur_feat_norm = cur_feat / torch.norm(cur_feat, 2, 0, True)\n\n            cur_feat_norm_t = cur_feat_norm.t()  # N3, 1024\n            fg_sim = torch.matmul(cur_feat_norm_t, fg_feat_norm) * 2.0\n            bg_sim = torch.matmul(cur_feat_norm_t, bg_feat_norm) * 2.0\n\n            fg_sim = fg_sim.softmax(-1)\n            bg_sim = bg_sim.softmax(-1)\n\n            fg_proto_local = torch.matmul(fg_sim, fg_feat.t())\n            bg_proto_local = torch.matmul(bg_sim, bg_feat.t())\n\n            fg_proto_local = fg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0)\n            bg_proto_local = bg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0)\n\n            fg_local_ls.append(fg_proto_local)\n            bg_local_ls.append(bg_proto_local)\n\n        # global proto\n        new_fg = torch.cat(fg_ls, 0).unsqueeze(-1).unsqueeze(-1)\n        new_bg = torch.cat(bg_ls, 0).unsqueeze(-1).unsqueeze(-1)\n\n        # local proto\n        new_fg_local = torch.cat(fg_local_ls, 0).unsqueeze(-1).unsqueeze(-1)\n        new_bg_local = torch.cat(bg_local_ls, 0)\n\n        return new_fg, new_bg, new_fg_local, new_bg_local\n\n    def similarity_func(self, feature_q, fg_proto, bg_proto):\n        similarity_fg = F.cosine_similarity(feature_q, fg_proto, dim=1)\n        similarity_bg = F.cosine_similarity(feature_q, bg_proto, dim=1)\n\n        out = torch.cat((similarity_bg[:, None, ...], similarity_fg[:, None, ...]), dim=1) * 10.0\n        return out\n\n    def masked_average_pooling(self, feature, mask):\n        mask = F.interpolate(mask.unsqueeze(1), size=feature.shape[-2:], mode='bilinear', align_corners=True)\n        masked_feature = torch.sum(feature * mask, dim=(2, 3)) \\\n                         / (mask.sum(dim=(2, 3)) + 1e-5)\n        return masked_feature",
+    "experimental_info": "Hyperparameters:\n- Batch Size: 4\n- Learning Rate: 0.001\n- Image Size: 400x400\n- Backbone: ResNet50\n- Training Dataset: pascal\n- Number of Support Pairs (Shot): 1\n- Random Seed: 0\n- Pre-trained Checkpoint Path: './outdir/models/Ori_SSP_trained_on_VOC.pth'\n- Testing Dataset Path: './data/chest'\n- Benchmark for Testing: lung\n- Global Noise Standard Deviation: 1.0\n- Local Noise Standard Deviation: 0.75\n\nModel Configuration:\n- Feature Dimensions for Perturbation Layers: [128, 256, 512]\n- Domain Rectification Adapter (DR_Adapter): A sequential module with three convolutional layers (kernel_size=7, dilation=2) interleaved with LayerNorm2d and ReLU activations.\n\nLoss Functions:\n- Segmentation Loss (LBCE): CrossEntropyLoss with ignore_index=255.\n- Cyclic Domain Alignment Loss (Lcyc) and Alignment Loss (Lalign): Computed using nn.L1Loss() for feature channel statistics (mean and variance).\n\nOptimizer:\n- Type: Stochastic Gradient Descent (SGD)\n- Learning Rate: 0.001\n- Momentum: 0.9\n- Weight Decay: 5e-4\n\nTraining Details:\n- Number of Training Epochs: 5\n- Global Style Statistics Momentum Update: Previous datum center/variance is updated with a factor of 0.99, and the current computed style contributes with a factor of 0.01 (e.g., `datum_center_ls[num][0] = datum_center_ls[num][0] * 0.99 + 0.01 * current_center`).\n- Loss Weighting:\n  - Segmentation loss from final prediction (out_ls[0]) and self-segmentation loss for query (out_ls[1]) have a weight of 1.\n  - Segmentation loss for support (out_ls[2]) has a weight of 0.2.\n  - Combined Lcyc and Lalign (x_param_ls[0]) has a weight of 2.\n- Perturbation Probabilities:\n  - `p_local` and `p_global` are random values (random.random()) checked against 0.5 for applying local and global perturbations respectively during training. During inference, they are forced to 1 to always apply rectification."
+}
