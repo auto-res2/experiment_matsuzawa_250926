@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The methodology revisits the empirical Bayes (EB) formulation for multi-task learning and develops an amortized variational inference scheme. A transductive variational posterior, qφ(dl_t, xt), is implemented as a function of both the labeled support set (dl_t) and the unlabeled query set (xt). The meta-model, φ, comprises an initialization network (λ) and a synthetic gradient network (ξ). The initialization network (λ) generates an initial set of task-specific weights (θ_0_t), implemented as a permutation-invariant feature averaging network. The synthetic gradient network (ξ), a three-layer MLP, synthesizes the gradient component (∂ℓ/∂ŷ) that requires ground truth labels, enabling inner-loop optimization on the unlabeled query set. Task-specific parameters (θ_K_t) are obtained by unrolling K steps of this synthetic gradient descent from θ_0_t. The predictive model utilizes a cosine-similarity based classifier.
+
+# GitHub URLs List
+['https://github.com/amzn/xfer']
+Output:
+{
+    "index": 0
+}
