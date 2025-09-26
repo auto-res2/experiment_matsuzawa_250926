@@ -6,5 +6,82 @@
     "meta-learning prototypical generalization",
     "few-shot data augmentation",
     "domain adaptation prototypes"
+  ],
+  "research_study_list": [
+    {
+      "title": "A Closer Look at Prototype Classifier for Few-shot Image Classification"
+    },
+    {
+      "title": "FeCAM: Exploiting the Heterogeneity of Class Distributions in Exemplar-Free Continual Learning"
+    },
+    {
+      "title": "This Looks Like It Rather Than That: ProtoKNN For Similarity-Based Classifiers"
+    },
+    {
+      "title": "A Theoretical Analysis of the Number of Shots in Few-Shot Learning"
+    },
+    {
+      "title": "Revisiting Prototypical Network for Cross Domain Few-Shot Learning"
+    },
+    {
+      "title": "Unraveling Meta-Learning: Understanding Feature Representations for Few-Shot Tasks"
+    },
+    {
+      "title": "A Theoretical Analysis of the Number of Shots in Few-Shot Learning"
+    },
+    {
+      "title": "POODLE: Improving Few-shot Learning via Penalizing Out-of-Distribution Samples"
+    },
+    {
+      "title": "Laplacian Regularized Few-Shot Learning"
+    },
+    {
+      "title": "A Closer Look at Prototype Classifier for Few-shot Image Classification"
+    },
+    {
+      "title": "A Closer Look at Prototype Classifier for Few-shot Image Classification"
+    },
+    {
+      "title": "ProtoDiff: Learning to Learn Prototypical Networks by Task-Guided Diffusion"
+    },
+    {
+      "title": "Learning a Universal Template for Few-shot Dataset Generalization"
+    },
+    {
+      "title": "FeCAM: Exploiting the Heterogeneity of Class Distributions in Exemplar-Free Continual Learning"
+    },
+    {
+      "title": "Meta-Learning without Memorization"
+    },
+    {
+      "title": "Data Augmentation for Meta-Learning"
+    },
+    {
+      "title": "Frozen Feature Augmentation for Few-Shot Image Classification"
+    },
+    {
+      "title": "Domain Gap Embeddings for Generative Dataset Augmentation"
+    },
+    {
+      "title": "Effective Data Augmentation With Diffusion Models"
+    },
+    {
+      "title": "SNIDA: Unlocking Few-Shot Object Detection with Non-linear Semantic Decoupling Augmentation"
+    },
+    {
+      "title": "A Prototype-Oriented Framework for Unsupervised Domain Adaptation"
+    },
+    {
+      "title": "Weakly-Supervised Domain Adaptive Semantic Segmentation With Prototypical Contrastive Learning"
+    },
+    {
+      "title": "Online Prototype Alignment for Few-shot Policy Transfer"
+    },
+    {
+      "title": "Subsidiary Prototype Alignment for Universal Domain Adaptation"
+    },
+    {
+      "title": "Mind the Gap Between Prototypes and Images in Cross-domain Finetuning"
+    }
   ]
 }
