@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+POODLE refines class prototypes by adapting the large-margin principle. It introduces a new objective function that combines a 'pull' term (Lpull) for in-distribution (positive) samples and a 'push' term (Lpush) for out-of-distribution (negative) samples. The overall loss is LPOODLE = Lce + α·Lpull −β·Lpush, where Lce is the standard cross-entropy loss and α, β are learnable coefficients. A stop-gradient operator is applied to the soft-weights in Lpull and Lpush to prevent conditional entropy maximization and trivial solutions. Negative samples for in-domain FSL can be base class data or uniformly random features on a hypersphere. For cross-domain FSL, disjoint classes or noisy unlabeled data from the target domain are used. The method uses a pre-trained, fixed feature extractor and initializes prototypes as the mean of support sample features, similar to Prototypical Networks.
+
+# GitHub URLs List
+['https://github.com/lehduong/poodle']
+Output:
+{
+    "index": 0
+}
