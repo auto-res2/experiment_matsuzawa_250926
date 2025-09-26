@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The proposed method minimizes a Laplacian-regularization objective E(Y) = N(Y) + λ/2 * L(Y) for few-shot tasks. N(Y) represents unary potentials, assigning query samples (xq) to the nearest class prototype (mc) from the support set using a distance metric. Prototypes are either single support examples (1-shot) or the mean of support examples (multi-shot), and can be further rectified by incorporating information from query features and cross-domain shift correction. L(Y) is a pairwise Laplacian regularizer, tr(Y^tLY), where L is the Laplacian matrix corresponding to an affinity matrix W. W uses k-nearest neighbor affinities to encourage similar query samples to have consistent label assignments. Optimization involves a concave relaxation of the Laplacian term for continuous assignment variables, augmented with a convex negative-entropy barrier function to handle simplex constraints. An iterative bound-optimization (Majorize-Minimization) technique is employed, yielding independent, closed-form updates for each query sample's soft assignment probabilities, ensuring convergence. The base feature embedding function (fθ) is learned through standard cross-entropy training on base classes, without meta-learning or episodic training.
+
+# GitHub URLs List
+['https://github.com/imtiazziko/LaplacianShot']
+Output:
+{
+    "index": 0
+}
