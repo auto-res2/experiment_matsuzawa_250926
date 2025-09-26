@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+The approach follows a two-step process: First, task-agnostic representation learning involves pre-training a Vision Transformer (ViT-small) feature extractor using Masked Image Modelling (MIM). Second, task-specific representation learning adapts these features by attaching a set of scaling (γ) and shifting (β) offset parameters to the ViT backbone, forming a linear transformation (y = γ ⊙ x + β) to adjust feature distributions with minimal parameters. The method strategically varies the tuning depth (dt) to adapt only deeper, less transferable network layers. For fine-tuning on the support set, a discriminative sample-aware loss function (proxy anchor loss) is used, which acts as a sample-guided supervisory signal to pull challenging positive examples closer to their class anchor and push challenging negative examples further away, based on inter- and intra-class variations. Additionally, features from the last df > 1 layers of the ViT are concatenated to form a fused feature embedding. Query classification is performed by combining the adapted feature extractor with a Nearest Centroid Classifier (NCC), where class prototypes are the mean of support set feature representations, and cosine similarity is used for distance.
+
+# GitHub URLs List
+['https://github.com/rashindrie/DIPA', 'https://github.com/bytedance/ibot', 'https://github.com/bytedance/ibot']
+Output:
+{
+    "index": 0
+}
