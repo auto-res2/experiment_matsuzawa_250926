@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+FLUTE employs a feature extractor (ResNet-18) where convolutional layer parameters form the universal template (Φ) and dataset-specific FiLM parameters (Ψ) are integrated via conditional batch normalization. During training, Φ and M sets of Ψ (one per training dataset) are jointly optimized using a multi-task cross-entropy loss with cosine classification readout heads. A separate Blender network, comprising a permutation-invariant set encoder and a linear readout, is trained as a dataset classifier to estimate compatibility between new tasks and training datasets. For test tasks from unseen datasets, the Blender network generates an initialization (Ψinit d*) for new FiLM parameters by taking a convex combination of the trained Ψ parameters. These Ψd* parameters are then fine-tuned via a few steps of gradient descent on the task's support set, minimizing a Nearest-Centroid Classifier (NCC) loss. Only Ψd* is updated during fine-tuning, while Φ remains frozen. Finally, the NCC classifies query examples using the learned Ψd*.
+
+# GitHub URLs List
+['https://github.com/google-research/meta-dataset']
+Output:
+{
+    "index": 0
+}
