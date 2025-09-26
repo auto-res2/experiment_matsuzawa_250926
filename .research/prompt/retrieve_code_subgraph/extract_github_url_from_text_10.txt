@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+ProtoLP operates as an alternating optimization procedure that refines prototypes and a dynamically constructed graph. It begins with initial prototypes (mean of support samples). The iterative steps are: (1) **Estimating Assignment**: Soft assignments (Z) are computed for all samples (support and query) to each prototype using a distance-based exponential function. (2) **Constructing Graph**: A bipartite adjacency matrix (W) is formed based on the computed Z, representing sample-to-prototype affinities, from which a graph Laplacian (L) is derived. This graph structure is dynamic and changes with prototype updates. (3) **Parameterized Label Propagation**: A linear projection (A) is introduced into the label propagation step (Y = ZA), which is optimized to minimize a combination of supervised loss on labeled data and a smoothness regularization term involving the dynamic graph. This avoids reliance on a uniform class prior. (4) **Updating Prototypes**: Prototypes (C) are refined using an exponential running average, incorporating information from the predicted soft label scores and sample features. The final label prediction for query samples is obtained by taking the argmax of the resulting soft score matrix. For scenarios with a uniform class prior, an optional Sinkhorn-Knopp algorithm can be applied for post-hoc normalization.
+
+# GitHub URLs List
+['https://github.com/allenhaozhu/protoLP', 'https://github.com/allenhaozhu/protoLP']
+Output:
+{
+    "index": 0
+}
