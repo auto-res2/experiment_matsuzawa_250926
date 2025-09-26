@@ -1,0 +1,2729 @@
+
+Input:
+You are a researcher with expertise in engineering in the field of machine learning.
+
+# Instructions
+- The content described in “Repository Content” corresponds to the GitHub repository of the method described in “Method.”
+- Please extract the following two pieces of information from “Repository Content”:
+    - experimental_code：Extract the implementation sections that are directly related to the method described in “Method.”
+    - experimental_info：Extract and output the experimental settings related to the method described in “Method.”
+
+# Method
+The proposed method integrates feature-wise transformation layers into the feature encoder of metric-based few-shot classification models. These layers modulate intermediate feature activations with affine transformations (scaling term \gamma and bias term \beta) sampled from Gaussian distributions, whose standard deviations are parameterized by \theta\gamma and \theta\beta. The feature-wise transformation layers are inserted after batch normalization layers at multiple levels. A learning-to-learn algorithm is employed to optimize these hyperparameters: in each iteration, a pseudo-seen domain and a pseudo-unseen domain are sampled from the available seen domains. The metric-based model is first updated using the pseudo-seen task, and then the effectiveness of the feature-wise transformation layers is measured on the pseudo-unseen task (without the transformation layers enabled), with its loss used to update the hyperparameters \theta\gamma and \theta\beta. This allows for joint optimization of the metric-based model and the transformation layers.
+
+# Repository Content
+File Path: data/__init__.py
+Content:
+from . import datamgr
+from . import dataset
+from . import additional_transforms
+from . import feature_loader
+
+File Path: data/additional_transforms.py
+Content:
+# Copyright 2017-present, Facebook, Inc.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
+# This is the implementation from https://github.com/facebookresearch/low-shot-shrink-hallucinate.
+
+import torch
+from PIL import ImageEnhance
+
+transformtypedict=dict(Brightness=ImageEnhance.Brightness, Contrast=ImageEnhance.Contrast, Sharpness=ImageEnhance.Sharpness, Color=ImageEnhance.Color)
+
+class ImageJitter(object):
+  def __init__(self, transformdict):
+    self.transforms = [(transformtypedict[k], transformdict[k]) for k in transformdict]
+
+  def __call__(self, img):
+    out = img
+    randtensor = torch.rand(len(self.transforms))
+
+    for i, (transformer, alpha) in enumerate(self.transforms):
+      r = alpha*(randtensor[i]*2.0 -1.0) + 1
+      out = transformer(out).enhance(r).convert('RGB')
+
+    return out
+
+File Path: data/datamgr.py
+Content:
+# This code is modified from https://github.com/facebookresearch/low-shot-shrink-hallucinate
+
+import torch
+import torchvision.transforms as transforms
+import data.additional_transforms as add_transforms
+from data.dataset import SimpleDataset, SetDataset, MultiSetDataset, EpisodicBatchSampler, MultiEpisodicBatchSampler
+from abc import abstractmethod
+
+class TransformLoader:
+  def __init__(self, image_size,
+      normalize_param = dict(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+      jitter_param = dict(Brightness=0.4, Contrast=0.4, Color=0.4)):
+    self.image_size = image_size
+    self.normalize_param = normalize_param
+    self.jitter_param = jitter_param
+
+  def parse_transform(self, transform_type):
+    if transform_type=='ImageJitter':
+      method = add_transforms.ImageJitter( self.jitter_param )
+      return method
+    method = getattr(transforms, transform_type)
+
+    if transform_type=='RandomResizedCrop':
+      return method(self.image_size)
+    elif transform_type=='CenterCrop':
+      return method(self.image_size)
+    elif transform_type=='Resize':
+      return method([int(self.image_size*1.15), int(self.image_size*1.15)])
+    elif transform_type=='Normalize':
+      return method(**self.normalize_param )
+    else:
+      return method()
+
+  def get_composed_transform(self, aug = False):
+    if aug:
+      transform_list = ['RandomResizedCrop', 'ImageJitter', 'RandomHorizontalFlip', 'ToTensor', 'Normalize']
+    else:
+      transform_list = ['Resize','CenterCrop', 'ToTensor', 'Normalize']
+
+    transform_funcs = [ self.parse_transform(x) for x in transform_list]
+    transform = transforms.Compose(transform_funcs)
+    return transform
+
+class DataManager:
+  @abstractmethod
+  def get_data_loader(self, data_file, aug):
+    pass
+
+class SimpleDataManager(DataManager):
+  def __init__(self, image_size, batch_size):
+    super(SimpleDataManager, self).__init__()
+    self.batch_size = batch_size
+    self.trans_loader = TransformLoader(image_size)
+
+  def get_data_loader(self, data_file, aug): #parameters that would change on train/val set
+    transform = self.trans_loader.get_composed_transform(aug)
+    dataset = SimpleDataset(data_file, transform)
+    data_loader_params = dict(batch_size = self.batch_size, shuffle = True, num_workers = 4, pin_memory = True)
+    data_loader = torch.utils.data.DataLoader(dataset, **data_loader_params)
+
+    return data_loader
+
+class SetDataManager(DataManager):
+  def __init__(self, image_size, n_way, n_support, n_query, n_eposide=100):
+    super(SetDataManager, self).__init__()
+    self.image_size = image_size
+    self.n_way = n_way
+    self.batch_size = n_support + n_query
+    self.n_eposide = n_eposide
+
+    self.trans_loader = TransformLoader(image_size)
+
+  def get_data_loader(self, data_file, aug): #parameters that would change on train/val set
+    transform = self.trans_loader.get_composed_transform(aug)
+    if isinstance(data_file, list):
+      dataset = MultiSetDataset( data_file , self.batch_size, transform )
+      sampler = MultiEpisodicBatchSampler(dataset.lens(), self.n_way, self.n_eposide )
+    else:
+      dataset = SetDataset( data_file , self.batch_size, transform )
+      sampler = EpisodicBatchSampler(len(dataset), self.n_way, self.n_eposide )
+    data_loader_params = dict(batch_sampler = sampler,  num_workers=4)
+    data_loader = torch.utils.data.DataLoader(dataset, **data_loader_params)
+    return data_loader
+
+File Path: data/dataset.py
+Content:
+# This code is modified from https://github.com/facebookresearch/low-shot-shrink-hallucinate
+
+import torch
+from PIL import Image
+import json
+import numpy as np
+import torchvision.transforms as transforms
+import os
+import random
+identity = lambda x:x
+
+
+class SimpleDataset:
+  def __init__(self, data_file, transform, target_transform=identity):
+    with open(data_file, 'r') as f:
+      self.meta = json.load(f)
+    self.transform = transform
+    self.target_transform = target_transform
+
+  def __getitem__(self,i):
+    image_path = os.path.join(self.meta['image_names'][i])
+    img = Image.open(image_path).convert('RGB')
+    img = self.transform(img)
+    target = self.target_transform(self.meta['image_labels'][i])
+    return img, target
+
+  def __len__(self):
+    return len(self.meta['image_names'])
+
+
+class SetDataset:
+  def __init__(self, data_file, batch_size, transform):
+    with open(data_file, 'r') as f:
+      self.meta = json.load(f)
+
+    self.cl_list = np.unique(self.meta['image_labels']).tolist()
+
+    self.sub_meta = {}
+    for cl in self.cl_list:
+      self.sub_meta[cl] = []
+
+    for x,y in zip(self.meta['image_names'],self.meta['image_labels']):
+      self.sub_meta[y].append(x)
+
+    self.sub_dataloader = []
+    sub_data_loader_params = dict(batch_size = batch_size,
+        shuffle = True,
+        num_workers = 0, #use main thread only or may receive multiple batches
+        pin_memory = False)
+    for cl in self.cl_list:
+      sub_dataset = SubDataset(self.sub_meta[cl], cl, transform = transform )
+      self.sub_dataloader.append( torch.utils.data.DataLoader(sub_dataset, **sub_data_loader_params) )
+
+  def __getitem__(self,i):
+    return next(iter(self.sub_dataloader[i]))
+
+  def __len__(self):
+    return len(self.cl_list)
+
+
+class MultiSetDataset:
+  def __init__(self, data_files, batch_size, transform):
+    self.cl_list = np.array([])
+    self.sub_dataloader = []
+    self.n_classes = []
+    for data_file in data_files:
+      with open(data_file, 'r') as f:
+        meta = json.load(f)
+      cl_list = np.unique(meta['image_labels']).tolist()
+      self.cl_list = np.concatenate((self.cl_list, cl_list))
+
+      sub_meta = {}
+      for cl in cl_list:
+        sub_meta[cl] = []
+
+      for x,y in zip(meta['image_names'], meta['image_labels']):
+        sub_meta[y].append(x)
+
+      sub_data_loader_params = dict(batch_size = batch_size,
+          shuffle = True,
+          num_workers = 0, #use main thread only or may receive multiple batches
+          pin_memory = False)
+      for cl in cl_list:
+        sub_dataset = SubDataset(sub_meta[cl], cl, transform = transform, min_size=batch_size)
+        self.sub_dataloader.append( torch.utils.data.DataLoader(sub_dataset, **sub_data_loader_params) )
+      self.n_classes.append(len(cl_list))
+
+  def __getitem__(self,i):
+    return next(iter(self.sub_dataloader[i]))
+
+  def __len__(self):
+    return len(self.cl_list)
+
+  def lens(self):
+    return self.n_classes
+
+
+class SubDataset:
+  def __init__(self, sub_meta, cl, transform=transforms.ToTensor(), target_transform=identity, min_size=50):
+    self.sub_meta = sub_meta
+    self.cl = cl
+    self.transform = transform
+    self.target_transform = target_transform
+    if len(self.sub_meta) < min_size:
+      idxs = [i % len(self.sub_meta) for i in range(min_size)]
+      self.sub_meta = np.array(self.sub_meta)[idxs].tolist()
+
+  def __getitem__(self,i):
+    image_path = os.path.join( self.sub_meta[i])
+    img = Image.open(image_path).convert('RGB')
+    img = self.transform(img)
+    target = self.target_transform(self.cl)
+    return img, target
+
+  def __len__(self):
+    return len(self.sub_meta)
+
+
+class EpisodicBatchSampler(object):
+  def __init__(self, n_classes, n_way, n_episodes):
+    self.n_classes = n_classes
+    self.n_way = n_way
+    self.n_episodes = n_episodes
+
+  def __len__(self):
+    return self.n_episodes
+
+  def __iter__(self):
+    for i in range(self.n_episodes):
+      yield torch.randperm(self.n_classes)[:self.n_way]
+
+
+class MultiEpisodicBatchSampler(object):
+  def __init__(self, n_classes, n_way, n_episodes):
+    self.n_classes = n_classes
+    self.n_way = n_way
+    self.n_episodes = n_episodes
+    self.n_domains = len(n_classes)
+
+  def __len__(self):
+    return self.n_episodes
+
+  def __iter__(self):
+    domain_list = [i%self.n_domains for i in range(self.n_episodes)]
+    random.shuffle(domain_list)
+    for i in range(self.n_episodes):
+      domain_idx = domain_list[i]
+      start_idx = sum(self.n_classes[:domain_idx])
+      yield torch.randperm(self.n_classes[domain_idx])[:self.n_way] + start_idx
+
+File Path: data/feature_loader.py
+Content:
+import torch
+import numpy as np
+import h5py
+
+class SimpleHDF5Dataset:
+  def __init__(self, file_handle = None):
+    if file_handle == None:
+      self.f = ''
+      self.all_feats_dset = []
+      self.all_labels = []
+      self.total = 0
+    else:
+      self.f = file_handle
+      self.all_feats_dset = self.f['all_feats'][...]
+      self.all_labels = self.f['all_labels'][...]
+      self.total = self.f['count'][0]
+  def __getitem__(self, i):
+    return torch.Tensor(self.all_feats_dset[i,:]), int(self.all_labels[i])
+
+  def __len__(self):
+    return self.total
+
+
+def init_loader(filename):
+  with h5py.File(filename, 'r') as f:
+    fileset = SimpleHDF5Dataset(f)
+
+  feats = fileset.all_feats_dset
+  labels = fileset.all_labels
+  while np.sum(feats[-1]) == 0:
+    feats  = np.delete(feats,-1,axis = 0)
+    labels = np.delete(labels,-1,axis = 0)
+
+  class_list = np.unique(np.array(labels)).tolist()
+  inds = range(len(labels))
+
+  cl_data_file = {}
+  for cl in class_list:
+    cl_data_file[cl] = []
+  for ind in inds:
+    cl_data_file[labels[ind]].append( feats[ind])
+
+  return cl_data_file
+
+File Path: filelists/cars/write_cars_filelist.py
+Content:
+import numpy as np
+#from os import listdir
+from os.path import join#isfile, isdir, join
+import os
+#import json
+import random
+from scipy.io import loadmat
+
+cwd = os.getcwd()
+data_path = join(cwd,'source/cars_train')
+savedir = './'
+dataset_list = ['base','val','novel']
+
+data_list = np.array(loadmat('source/devkit/cars_train_annos.mat')['annotations'][0])
+class_list = np.array(loadmat('source/devkit/cars_meta.mat')['class_names'][0])
+classfile_list_all = [[] for i in range(len(class_list))]
+
+for i in range(len(data_list)):
+  folder_path = join(data_path, data_list[i][-1][0])
+  classfile_list_all[data_list[i][-2][0][0] - 1].append(folder_path)
+
+for i in range(len(classfile_list_all)):
+  random.shuffle(classfile_list_all[i])
+
+'''folder_list = [f for f in listdir(data_path) if isdir(join(data_path, f))]
+folder_list.sort()
+label_dict = dict(zip(folder_list,range(0,len(folder_list))))
+
+classfile_list_all = []
+
+for i, folder in enumerate(folder_list):
+    folder_path = join(data_path, folder)
+    classfile_list_all.append( [ join(folder_path, cf) for cf in listdir(folder_path) if (isfile(join(folder_path,cf)) and cf[0] != '.')])
+    random.shuffle(classfile_list_all[i])'''
+
+for dataset in dataset_list:
+    file_list = []
+    label_list = []
+    for i, classfile_list in enumerate(classfile_list_all):
+        if 'base' in dataset:
+            if (i%2 == 0):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'val' in dataset:
+            if (i%4 == 1):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'novel' in dataset:
+            if (i%4 == 3):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+
+    fo = open(savedir + dataset + ".json", "w")
+    fo.write('{"label_names": [')
+    fo.writelines(['"%s",' % item[0]  for item in class_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_names": [')
+    fo.writelines(['"%s",' % item  for item in file_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_labels": [')
+    fo.writelines(['%d,' % item  for item in label_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write(']}')
+
+    fo.close()
+    print("%s -OK" %dataset)
+
+File Path: filelists/cub/write_cub_filelist.py
+Content:
+import numpy as np
+from os import listdir
+from os.path import isfile, isdir, join
+import os
+import random
+
+cwd = os.getcwd()
+data_path = join(cwd,'source/CUB_200_2011/images')
+savedir = './'
+dataset_list = ['base','val','novel']
+
+#if not os.path.exists(savedir):
+#    os.makedirs(savedir)
+
+folder_list = [f for f in listdir(data_path) if isdir(join(data_path, f))]
+folder_list.sort()
+label_dict = dict(zip(folder_list,range(0,len(folder_list))))
+
+classfile_list_all = []
+
+for i, folder in enumerate(folder_list):
+    folder_path = join(data_path, folder)
+    classfile_list_all.append( [ join(folder_path, cf) for cf in listdir(folder_path) if (isfile(join(folder_path,cf)) and cf[0] != '.')])
+    random.shuffle(classfile_list_all[i])
+
+
+for dataset in dataset_list:
+    file_list = []
+    label_list = []
+    for i, classfile_list in enumerate(classfile_list_all):
+        if 'base' in dataset:
+            if (i%2 == 0):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'val' in dataset:
+            if (i%4 == 1):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'novel' in dataset:
+            if (i%4 == 3):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+
+    fo = open(savedir + dataset + ".json", "w")
+    fo.write('{"label_names": [')
+    fo.writelines(['"%s",' % item  for item in folder_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_names": [')
+    fo.writelines(['"%s",' % item  for item in file_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_labels": [')
+    fo.writelines(['%d,' % item  for item in label_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write(']}')
+
+    fo.close()
+    print("%s -OK" %dataset)
+
+File Path: filelists/miniImagenet/write_miniImagenet_filelist.py
+Content:
+import numpy as np
+from os import listdir
+from os.path import isfile, isdir, join
+import os
+import random
+
+cwd = os.getcwd()
+root_path = join(cwd,'source/mini_imagenet_full_size')
+savedir = './'
+dataset_list = ['base','val','novel']
+
+for dataset in dataset_list:
+    if dataset == 'base':
+        data_path = join(root_path , 'train')
+    elif dataset == 'val':
+        data_path = join(root_path , 'val')
+    elif dataset == 'novel':
+        data_path = join(root_path , 'test')
+    else:
+        raise Exception('no such dataset')
+
+    folder_list = [f for f in listdir(data_path) if isdir(join(data_path, f))]
+    print('{} dataset contains {} categories'.format(dataset, len(folder_list)))
+    folder_list.sort()
+    label_dict = dict(zip(folder_list,range(0,len(folder_list))))
+
+    classfile_list_all = []
+
+    for i, folder in enumerate(folder_list):
+        folder_path = join(data_path, folder)
+        classfile_list_all.append( [ join(folder_path, cf) for cf in listdir(folder_path) if (isfile(join(folder_path,cf)) and cf[0] != '.')])
+        random.shuffle(classfile_list_all[i])
+        assert(len(classfile_list_all[i]) == 600)
+
+    file_list = []
+    label_list = []
+    for i, classfile_list in enumerate(classfile_list_all):
+        file_list = file_list + classfile_list
+        label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+
+    fo = open(savedir + dataset + ".json", "w")
+    fo.write('{"label_names": [')
+    fo.writelines(['"%s",' % item  for item in folder_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_names": [')
+    fo.writelines(['"%s",' % item  for item in file_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_labels": [')
+    fo.writelines(['%d,' % item  for item in label_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write(']}')
+
+    fo.close()
+    print("%s -OK" %dataset)
+
+File Path: filelists/places/write_places_filelist.py
+Content:
+import numpy as np
+from os import listdir
+from os.path import isfile, isdir, join
+import os
+import random
+
+cwd = os.getcwd()
+data_path = join(cwd,'source/places365_standard/train')
+savedir = './'
+dataset_list = ['base','val','novel']
+
+
+folder_list = [f for f in listdir(data_path) if isdir(join(data_path, f))]
+folder_list.sort()
+label_dict = dict(zip(folder_list,range(0,len(folder_list))))
+
+classfile_list_all = []
+
+for i, folder in enumerate(folder_list):
+    folder_path = join(data_path, folder)
+    cfs = [cf for cf in listdir(folder_path) if (isfile(join(folder_path,cf)) and cf[0] != '.')]
+    cfs.sort()
+    cfs = cfs[:200]
+    classfile_list_all.append([ join(folder_path, cf) for cf in cfs])
+    random.shuffle(classfile_list_all[i])
+print(len(classfile_list_all))
+
+for dataset in dataset_list:
+    file_list = []
+    label_list = []
+    for i, classfile_list in enumerate(classfile_list_all):
+        if 'base' in dataset:
+            if (i%2 == 0):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'val' in dataset:
+            if (i%4 == 1):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'novel' in dataset:
+            if (i%4 == 3):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+
+    fo = open(savedir + dataset + ".json", "w")
+    fo.write('{"label_names": [')
+    fo.writelines(['"%s",' % item  for item in folder_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_names": [')
+    fo.writelines(['"%s",' % item  for item in file_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_labels": [')
+    fo.writelines(['%d,' % item  for item in label_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write(']}')
+
+    fo.close()
+    print("%s -OK" %dataset)
+
+File Path: filelists/plantae/write_plantae_filelist.py
+Content:
+import numpy as np
+from os import listdir
+from os.path import isfile, isdir, join
+import os
+#import json
+import random
+from subprocess import call
+
+cwd = os.getcwd()
+source_path = join(cwd,'source/Plantae')
+data_path = join(cwd,'images')
+if not os.path.exists(data_path):
+    os.makedirs(data_path)
+savedir = './'
+dataset_list = ['base','val','novel']
+
+
+folder_list = [f for f in listdir(source_path) if isdir(join(source_path, f))]
+#folder_list.sort()
+folder_list_count = np.array([len(listdir(join(source_path, f))) for f in folder_list])
+folder_list_idx = np.argsort(folder_list_count)
+folder_list = np.array(folder_list)[folder_list_idx[-200:]].tolist()
+label_dict = dict(zip(folder_list,range(0,len(folder_list))))
+
+classfile_list_all = []
+
+for i, folder in enumerate(folder_list):
+    source_folder_path = join(source_path, folder)
+    folder_path = join(data_path, folder)
+    classfile_list_all.append( [ cf for cf in listdir(source_folder_path) if (isfile(join(source_folder_path,cf)) and cf[0] != '.')])
+    random.shuffle(classfile_list_all[i])
+    classfile_list_all[i] = classfile_list_all[i][:min(len(classfile_list_all[i]), 600)]
+
+    call('mkdir ' + folder_path, shell=True)
+    for cf in classfile_list_all[i]:
+      call('cp ' + join(source_folder_path, cf) + ' ' + join(folder_path, cf), shell=True)
+    classfile_list_all[i] = [join(folder_path, cf) for cf in classfile_list_all[i]]
+
+for dataset in dataset_list:
+    file_list = []
+    label_list = []
+    for i, classfile_list in enumerate(classfile_list_all):
+        if 'base' in dataset:
+            if (i%2 == 0):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'val' in dataset:
+            if (i%4 == 1):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+        if 'novel' in dataset:
+            if (i%4 == 3):
+                file_list = file_list + classfile_list
+                label_list = label_list + np.repeat(i, len(classfile_list)).tolist()
+
+    fo = open(savedir + dataset + ".json", "w")
+    fo.write('{"label_names": [')
+    fo.writelines(['"%s",' % item  for item in folder_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_names": [')
+    fo.writelines(['"%s",' % item  for item in file_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write('],')
+
+    fo.write('"image_labels": [')
+    fo.writelines(['%d,' % item  for item in label_list])
+    fo.seek(0, os.SEEK_END)
+    fo.seek(fo.tell()-1, os.SEEK_SET)
+    fo.write(']}')
+
+    fo.close()
+    print("%s -OK" %dataset)
+
+File Path: filelists/process.py
+Content:
+import sys
+import os
+from subprocess import call
+
+if len(sys.argv) != 2:
+  raise Exception('Incorrect command! e.g., python3 process.py DATASET [cars, cub, places, miniImagenet, plantae]')
+dataset = sys.argv[1]
+
+print('--- process ' + dataset + ' dataset ---')
+if not os.path.exists(os.path.join(dataset, 'source')):
+  os.makedirs(os.path.join(dataset, 'source'))
+os.chdir(os.path.join(dataset, 'source'))
+
+# download files
+if dataset == 'cars':
+  call('wget http://imagenet.stanford.edu/internal/car196/cars_train.tgz', shell=True)
+  call('tar -zxf cars_train.tgz', shell=True)
+  call('wget https://ai.stanford.edu/~jkrause/cars/car_devkit.tgz', shell=True)
+  call('tar -zxf car_devkit.tgz', shell=True)
+elif dataset == 'cub':
+  call('wget http://www.vision.caltech.edu/visipedia-data/CUB-200-2011/CUB_200_2011.tgz', shell=True)
+  call('tar -zxf CUB_200_2011.tgz', shell=True)
+elif dataset == 'places':
+  call('wget http://data.csail.mit.edu/places/places365/places365standard_easyformat.tar', shell=True)
+  call('tar -xf places365standard_easyformat.tar', shell=True)
+elif dataset == 'miniImagenet':
+  # this file is from MAML++: https://github.com/AntreasAntoniou/HowToTrainYourMAMLPytorch
+  call('wget http://vllab.ucmerced.edu/ym41608/projects/CrossDomainFewShot/filelists/mini_imagenet_full_size.tar.bz2', shell=True)
+  call('tar -xjf mini_imagenet_full_size.tar.bz2', shell=True)
+elif dataset == 'plantae':
+  call('wget http://vllab.ucmerced.edu/ym41608/projects/CrossDomainFewShot/filelists/plantae.tar.gz', shell=True)
+  call('tar -xzf plantae.tar.gz', shell=True)
+else:
+  raise Exception('No such dataset!')
+
+# process file
+os.chdir('..')
+call('python3 write_' + dataset + '_filelist.py', shell=True)
+
+File Path: methods/LFTNet.py
+Content:
+import torch
+import torch.nn as nn
+from methods import protonet
+from methods import matchingnet
+from methods import relationnet
+from methods import gnnnet
+from methods.backbone import model_dict
+from methods import backbone
+from methods import gnn
+from tensorboardX import SummaryWriter
+
+
+class LFTNet(nn.Module):
+  def __init__(self, params, tf_path=None, change_way=True):
+    super(LFTNet, self).__init__()
+
+    # tf writer
+    self.tf_writer = SummaryWriter(log_dir=tf_path) if tf_path is not None else None
+
+    # get metric-based model and enable L2L(maml) training
+    train_few_shot_params    = dict(n_way=params.train_n_way, n_support=params.n_shot)
+    backbone.FeatureWiseTransformation2d_fw.feature_augment = True
+    backbone.ConvBlock.maml = True
+    backbone.SimpleBlock.maml = True
+    backbone.ResNet.maml = True
+    if params.method == 'protonet':
+      model = protonet.ProtoNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method == 'matchingnet':
+      backbone.LSTMCell.maml = True
+      model = matchingnet.MatchingNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method in ['relationnet', 'relationnet_softmax']:
+      relationnet.RelationConvBlock.maml = True
+      relationnet.RelationModule.maml = True
+      if params.model == 'Conv4':
+        feature_model = backbone.Conv4NP
+      elif params.model == 'Conv6':
+        feature_model = backbone.Conv6NP
+      else:
+        feature_model = model_dict[params.model]
+      loss_type = 'mse' if params.method == 'relationnet' else 'softmax'
+      model = relationnet.RelationNet( feature_model, loss_type = loss_type, tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method == 'gnnnet':
+      gnnnet.GnnNet.maml=True
+      gnn.Gconv.maml=True
+      gnn.Wcompute.maml=True
+      model = gnnnet.GnnNet(model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    else:
+      raise ValueError('Unknown method')
+    self.model = model
+    print('  train with {} framework'.format(params.method))
+
+    # for auxiliary training
+    feat_dim = self.model.feat_dim[0] if type(self.model.feat_dim) is list else self.model.feat_dim
+    self.aux_classifier = nn.Sequential(
+        nn.Linear(feat_dim, feat_dim),
+        nn.ReLU(inplace=True),
+        nn.Linear(feat_dim, feat_dim),
+        nn.ReLU(inplace=True),
+        nn.Linear(feat_dim, 64))
+    self.aux_loss_fn = nn.CrossEntropyLoss()
+
+    # optimizer
+    model_params, ft_params = self.split_model_parameters()
+    self.model_optim = torch.optim.Adam(model_params + list(self.aux_classifier.parameters()))
+    self.ft_optim = torch.optim.Adam(ft_params, weight_decay=1e-8, lr=1e-3)
+
+    # total epochs
+    self.total_epoch = params.stop_epoch
+
+  # split the parameters of feature-wise transforamtion layers and others
+  def split_model_parameters(self):
+    model_params = []
+    ft_params = []
+    for n, p in self.model.named_parameters():
+      n = n.split('.')
+      if n[-1] == 'gamma' or n[-1] == 'beta':
+        ft_params.append(p)
+      else:
+        model_params.append(p)
+    return model_params, ft_params
+
+  def forward_aux_loss(self, x, y):
+    x = x.cuda()
+    y = y.cuda()
+    feat = self.model.feature(x)
+    if feat.dim() > 2:
+      feat = nn.functional.avg_pool2d(feat, 7)
+      feat = feat.view(feat.size(0), -1)
+    scores = self.aux_classifier(feat)
+    loss = self.aux_loss_fn(scores, y)
+    return loss
+
+  # jotinly train the model and the feature-wise transformation layers
+  def trainall_loop(self, epoch, ps_loader, pu_loader, aux_iter, total_it):
+    print_freq = len(ps_loader) / 10
+    avg_model_loss = 0.
+    avg_ft_loss = 0.
+
+    for i, ((x, _), (x_new, _)) in enumerate(zip(ps_loader, pu_loader)):
+
+      # clear fast weight
+      for weight in self.split_model_parameters()[0]:
+        weight.fast = None
+
+      # auxiliary loss for stablize the training
+      self.model.eval()
+      x_aux, y_aux = next(aux_iter)
+      aux_loss = self.forward_aux_loss(x_aux, y_aux)
+      aux_loss_weighted = aux_loss*(0.9**((20*epoch//self.total_epoch)))
+
+      # classifcation loss with ft layers (optimize model)
+      self.model.train()
+      self.model.n_query = x.size(1) - self.model.n_support
+      if self.model.change_way:
+        self.model.n_way = x.size(0)
+      _, model_loss = self.model.set_forward_loss(x)
+
+      # update model parameters according to model_loss
+      meta_grad = torch.autograd.grad(model_loss, self.split_model_parameters()[0], create_graph=True)
+      for k, weight in enumerate(self.split_model_parameters()[0]):
+        weight.fast = weight - self.model_optim.param_groups[0]['lr']*meta_grad[k]
+      meta_grad = [g.detach() for g in meta_grad]
+
+      # classification loss with updated model and without ft layers (optimize ft layers)
+      self.model.eval()
+      _, ft_loss = self.model.set_forward_loss(x_new)
+
+      # optimize model
+      self.model_optim.zero_grad()
+      aux_loss_weighted.backward()
+      for k, weight in enumerate(self.split_model_parameters()[0]):
+        weight.grad = meta_grad[k] if weight.grad is None else weight.grad + meta_grad[k]
+      self.model_optim.step()
+
+      # optimize ft
+      self.ft_optim.zero_grad()
+      ft_loss.backward()
+      self.ft_optim.step()
+
+      # loss
+      avg_model_loss += model_loss.item()
+      avg_ft_loss += ft_loss.item()
+
+      if (i + 1) % print_freq == 0:
+        print('Epoch {:d}/{:d} | Batch {:d}/{:d} | model_loss {:f}, ft_loss {:f}'.format(\
+            epoch + 1, self.total_epoch, i + 1, len(ps_loader), avg_model_loss/float(i+1), avg_ft_loss/float(i+1)))
+      if (total_it + 1) % 10 == 0 and self.tf_writer is not None:
+        self.tf_writer.add_scalar('LFTNet/model_loss', model_loss.item(), total_it + 1)
+        self.tf_writer.add_scalar('LFTNet/ft_loss', ft_loss.item(), total_it + 1)
+        self.tf_writer.add_scalar('LFTNet/aux_loss', aux_loss.item(), total_it + 1)
+      total_it += 1
+
+    return total_it
+
+  # train the model itself (with ft layers)
+  def train_loop(self, epoch, base_loader, total_it):
+    print_freq = len(base_loader) / 10
+    avg_model_loss = 0.
+
+    # clear fast weight and enable ft layers
+    self.model.train()
+    for weight in self.model.parameters():
+      weight.fast = None
+
+    # trainin loop
+    for i, (x, _) in enumerate(base_loader):
+
+      # loss = model_loss
+      self.model.n_query = x.size(1) - self.model.n_support
+      if self.model.change_way:
+        self.model.n_way = x.size(0)
+      _, model_loss = self.model.set_forward_loss(x)
+
+      # optimize
+      self.model_optim.zero_grad()
+      model_loss.backward()
+      self.model_optim.step()
+
+      # loss
+      avg_model_loss += model_loss.item()
+      if (i + 1) % print_freq == 0:
+        print('Epoch {:d}/{:d} | Batch {:d}/{:d} | model_loss {:f}'.format(epoch + 1, self.total_epoch, i + 1, len(base_loader), avg_model_loss/float(i+1)))
+      if (total_it + 1) % 10 == 0 and self.tf_writer is not None:
+        self.tf_writer.add_scalar('LFTNet/model_loss', model_loss.item(), total_it + 1)
+      total_it += 1
+    return total_it
+
+  def test_loop(self, test_loader, record=None):
+    self.model.eval()
+    for weight in self.model.parameters():
+      weight.fast = None
+    return self.model.test_loop(test_loader, record)
+
+  def cuda(self):
+    self.model.cuda()
+    self.aux_classifier.cuda()
+
+  def reset(self, warmUpState=None):
+
+    # reset feature
+    if warmUpState is not None:
+      self.model.feature.load_state_dict(warmUpState, strict=False)
+      print('    reset feature success!')
+
+    # reset other module
+    self.model.reset_modules()
+    self.model.cuda()
+
+    # reset optimizer
+    self.model_optim = torch.optim.Adam(self.split_model_parameters()[0])
+    return
+
+  # save function
+  def save(self, filename, epoch):
+    state = {'epoch': epoch,
+             'model_state': self.model.state_dict(),
+             'aux_classifier_state': self.aux_classifier.state_dict(),
+             'model_optim_state': self.model_optim.state_dict(),
+             'ft_optim_state': self.ft_optim.state_dict()}
+    torch.save(state, filename)
+
+  # load function
+  def resume(self, filename):
+    state = torch.load(filename)
+    self.model.load_state_dict(state['model_state'])
+    self.aux_classifier.load_state_dict(state['aux_classifier_state'])
+    self.model_optim.load_state_dict(state['model_optim_state'])
+    self.ft_optim.load_state_dict(state['ft_optim_state'])
+    return state['epoch'] + 1
+
+File Path: methods/__init__.py
+Content:
+from . import meta_template
+from . import baselinetrain
+from . import matchingnet
+from . import protonet
+from . import relationnet
+from . import LFTNet
+
+File Path: methods/backbone.py
+Content:
+# This code is modified from https://github.com/facebookresearch/low-shot-shrink-hallucinate
+
+import torch
+import torch.nn as nn
+import math
+import torch.nn.functional as F
+from torch.nn.utils import weight_norm
+
+# --- gaussian initialize ---
+def init_layer(L):
+  # Initialization using fan-in
+  if isinstance(L, nn.Conv2d):
+    n = L.kernel_size[0]*L.kernel_size[1]*L.out_channels
+    L.weight.data.normal_(0,math.sqrt(2.0/float(n)))
+  elif isinstance(L, nn.BatchNorm2d):
+    L.weight.data.fill_(1)
+    L.bias.data.fill_(0)
+
+class distLinear(nn.Module):
+  def __init__(self, indim, outdim):
+    super(distLinear, self).__init__()
+    self.L = weight_norm(nn.Linear(indim, outdim, bias=False), name='weight', dim=0)
+    self.relu = nn.ReLU()
+
+  def forward(self, x):
+    x_norm = torch.norm(x, p=2, dim =1).unsqueeze(1).expand_as(x)
+    x_normalized = x.div(x_norm + 0.00001)
+    L_norm = torch.norm(self.L.weight.data, p=2, dim =1).unsqueeze(1).expand_as(self.L.weight.data)
+    self.L.weight.data = self.L.weight.data.div(L_norm + 0.00001)
+    cos_dist = self.L(x_normalized)
+    scores = 10 * cos_dist
+    return scores
+
+# --- flatten tensor ---
+class Flatten(nn.Module):
+  def __init__(self):
+    super(Flatten, self).__init__()
+
+  def forward(self, x):
+    return x.view(x.size(0), -1)
+
+# --- LSTMCell module for matchingnet ---
+class LSTMCell(nn.Module):
+  maml = False
+  def __init__(self, input_size, hidden_size, bias=True):
+    super(LSTMCell, self).__init__()
+    self.input_size = input_size
+    self.hidden_size = hidden_size
+    self.bias = bias
+    if self.maml:
+      self.x2h = Linear_fw(input_size, 4 * hidden_size, bias=bias)
+      self.h2h = Linear_fw(hidden_size, 4 * hidden_size, bias=bias)
+    else:
+      self.x2h = nn.Linear(input_size, 4 * hidden_size, bias=bias)
+      self.h2h = nn.Linear(hidden_size, 4 * hidden_size, bias=bias)
+    self.reset_parameters()
+
+  def reset_parameters(self):
+    std = 1.0 / math.sqrt(self.hidden_size)
+    for w in self.parameters():
+      w.data.uniform_(-std, std)
+
+  def forward(self, x, hidden=None):
+    if hidden is None:
+      hx = torch.zeors_like(x)
+      cx = torch.zeros_like(x)
+    else:
+      hx, cx = hidden
+
+    gates = self.x2h(x) + self.h2h(hx)
+    ingate, forgetgate, cellgate, outgate = torch.split(gates, self.hidden_size, dim=1)
+
+    ingate = torch.sigmoid(ingate)
+    forgetgate = torch.sigmoid(forgetgate)
+    cellgate = torch.tanh(cellgate)
+    outgate = torch.sigmoid(outgate)
+
+    cy = torch.mul(cx, forgetgate) +  torch.mul(ingate, cellgate)
+    hy = torch.mul(outgate, torch.tanh(cy))
+    return (hy, cy)
+
+# --- LSTM module for matchingnet ---
+class LSTM(nn.Module):
+  def __init__(self, input_size, hidden_size, num_layers=1, bias=True, batch_first=False, bidirectional=False):
+    super(LSTM, self).__init__()
+
+    self.input_size = input_size
+    self.hidden_size = hidden_size
+    self.num_layers = num_layers
+    self.bias = bias
+    self.batch_first = batch_first
+    self.num_directions = 2 if bidirectional else 1
+    assert(self.num_layers == 1)
+
+    self.lstm = LSTMCell(input_size, hidden_size, self.bias)
+
+  def forward(self, x, hidden=None):
+    # swap axis if batch first
+    if self.batch_first:
+      x = x.permute(1, 0 ,2)
+
+    # hidden state
+    if hidden is None:
+      h0 = torch.zeros(self.num_directions, x.size(1), self.hidden_size, dtype=x.dtype, device=x.device)
+      c0 = torch.zeros(self.num_directions, x.size(1), self.hidden_size, dtype=x.dtype, device=x.device)
+    else:
+      h0, c0 = hidden
+
+    # forward
+    outs = []
+    hn = h0[0]
+    cn = c0[0]
+    for seq in range(x.size(0)):
+      hn, cn = self.lstm(x[seq], (hn, cn))
+      outs.append(hn.unsqueeze(0))
+    outs = torch.cat(outs, dim=0)
+
+    # reverse foward
+    if self.num_directions == 2:
+      outs_reverse = []
+      hn = h0[1]
+      cn = c0[1]
+      for seq in range(x.size(0)):
+        seq = x.size(1) - 1 - seq
+        hn, cn = self.lstm(x[seq], (hn, cn))
+        outs_reverse.append(hn.unsqueeze(0))
+      outs_reverse = torch.cat(outs_reverse, dim=0)
+      outs = torch.cat([outs, outs_reverse], dim=2)
+
+    # swap axis if batch first
+    if self.batch_first:
+      outs = outs.permute(1, 0, 2)
+    return outs
+
+# --- Linear module ---
+class Linear_fw(nn.Linear): #used in MAML to forward input with fast weight
+  def __init__(self, in_features, out_features, bias=True):
+    super(Linear_fw, self).__init__(in_features, out_features, bias=bias)
+    self.weight.fast = None #Lazy hack to add fast weight link
+    self.bias.fast = None
+
+  def forward(self, x):
+    if self.weight.fast is not None and self.bias.fast is not None:
+      out = F.linear(x, self.weight.fast, self.bias.fast)
+    else:
+      out = super(Linear_fw, self).forward(x)
+    return out
+
+# --- Conv2d module ---
+class Conv2d_fw(nn.Conv2d): #used in MAML to forward input with fast weight
+  def __init__(self, in_channels, out_channels, kernel_size, stride=1,padding=0, bias = True):
+    super(Conv2d_fw, self).__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=bias)
+    self.weight.fast = None
+    if not self.bias is None:
+      self.bias.fast = None
+
+  def forward(self, x):
+    if self.bias is None:
+      if self.weight.fast is not None:
+        out = F.conv2d(x, self.weight.fast, None, stride= self.stride, padding=self.padding)
+      else:
+        out = super(Conv2d_fw, self).forward(x)
+    else:
+      if self.weight.fast is not None and self.bias.fast is not None:
+        out = F.conv2d(x, self.weight.fast, self.bias.fast, stride= self.stride, padding=self.padding)
+      else:
+        out = super(Conv2d_fw, self).forward(x)
+    return out
+
+# --- softplus module ---
+def softplus(x):
+  return torch.nn.functional.softplus(x, beta=100)
+
+# --- feature-wise transformation layer ---
+class FeatureWiseTransformation2d_fw(nn.BatchNorm2d):
+  feature_augment = False
+  def __init__(self, num_features, momentum=0.1, track_running_stats=True):
+    super(FeatureWiseTransformation2d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)
+    self.weight.fast = None
+    self.bias.fast = None
+    if self.track_running_stats:
+      self.register_buffer('running_mean', torch.zeros(num_features))
+      self.register_buffer('running_var', torch.zeros(num_features))
+    if self.feature_augment: # initialize {gamma, beta} with {0.3, 0.5}
+      self.gamma = torch.nn.Parameter(torch.ones(1, num_features, 1, 1)*0.3)
+      self.beta  = torch.nn.Parameter(torch.ones(1, num_features, 1, 1)*0.5)
+    self.reset_parameters()
+
+  def reset_running_stats(self):
+    if self.track_running_stats:
+      self.running_mean.zero_()
+      self.running_var.fill_(1)
+
+  def forward(self, x, step=0):
+    if self.weight.fast is not None and self.bias.fast is not None:
+      weight = self.weight.fast
+      bias = self.bias.fast
+    else:
+      weight = self.weight
+      bias = self.bias
+    if self.track_running_stats:
+      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)
+    else:
+      out = F.batch_norm(x, torch.zeros_like(x), torch.ones_like(x), weight, bias, training=True, momentum=1)
+
+    # apply feature-wise transformation
+    if self.feature_augment and self.training:
+      gamma = (1 + torch.randn(1, self.num_features, 1, 1, dtype=self.gamma.dtype, device=self.gamma.device)*softplus(self.gamma)).expand_as(out)
+      beta = (torch.randn(1, self.num_features, 1, 1, dtype=self.beta.dtype, device=self.beta.device)*softplus(self.beta)).expand_as(out)
+      out = gamma*out + beta
+    return out
+
+# --- BatchNorm2d ---
+class BatchNorm2d_fw(nn.BatchNorm2d):
+  def __init__(self, num_features, momentum=0.1, track_running_stats=True):
+    super(BatchNorm2d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)
+    self.weight.fast = None
+    self.bias.fast = None
+    if self.track_running_stats:
+      self.register_buffer('running_mean', torch.zeros(num_features))
+      self.register_buffer('running_var', torch.zeros(num_features))
+    self.reset_parameters()
+
+  def reset_running_stats(self):
+    if self.track_running_stats:
+      self.running_mean.zero_()
+      self.running_var.fill_(1)
+
+  def forward(self, x, step=0):
+    if self.weight.fast is not None and self.bias.fast is not None:
+      weight = self.weight.fast
+      bias = self.bias.fast
+    else:
+      weight = self.weight
+      bias = self.bias
+    if self.track_running_stats:
+      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)
+    else:
+      out = F.batch_norm(x, torch.zeros(x.size(1), dtype=x.dtype, device=x.device), torch.ones(x.size(1), dtype=x.dtype, device=x.device), weight, bias, training=True, momentum=1)
+    return out
+
+# --- BatchNorm1d ---
+class BatchNorm1d_fw(nn.BatchNorm1d):
+  def __init__(self, num_features, momentum=0.1, track_running_stats=True):
+    super(BatchNorm1d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)
+    self.weight.fast = None
+    self.bias.fast = None
+    if self.track_running_stats:
+      self.register_buffer('running_mean', torch.zeros(num_features))
+      self.register_buffer('running_var', torch.zeros(num_features))
+    self.reset_parameters()
+
+  def reset_running_stats(self):
+    if self.track_running_stats:
+      self.running_mean.zero_()
+      self.running_var.fill_(1)
+
+  def forward(self, x, step=0):
+    if self.weight.fast is not None and self.bias.fast is not None:
+      weight = self.weight.fast
+      bias = self.bias.fast
+    else:
+      weight = self.weight
+      bias = self.bias
+    if self.track_running_stats:
+      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)
+    else:
+      out = F.batch_norm(x, torch.zeros(x.size(1), dtype=x.dtype, device=x.device), torch.ones(x.size(1), dtype=x.dtype, device=x.device), weight, bias, training=True, momentum=1)
+    return out
+
+# --- Simple Conv Block ---
+class ConvBlock(nn.Module):
+  maml = False
+  def __init__(self, indim, outdim, pool = True, padding = 1):
+    super(ConvBlock, self).__init__()
+    self.indim  = indim
+    self.outdim = outdim
+    if self.maml:
+      self.C = Conv2d_fw(indim, outdim, 3, padding = padding)
+      self.BN = FeatureWiseTransformation2d_fw(outdim)
+    else:
+      self.C = nn.Conv2d(indim, outdim, 3, padding= padding)
+      self.BN = nn.BatchNorm2d(outdim)
+    self.relu = nn.ReLU(inplace=True)
+
+    self.parametrized_layers = [self.C, self.BN, self.relu]
+    if pool:
+      self.pool = nn.MaxPool2d(2)
+      self.parametrized_layers.append(self.pool)
+
+    for layer in self.parametrized_layers:
+      init_layer(layer)
+    self.trunk = nn.Sequential(*self.parametrized_layers)
+
+  def forward(self,x):
+    out = self.trunk(x)
+    return out
+
+# --- Simple ResNet Block ---
+class SimpleBlock(nn.Module):
+  maml = False
+  def __init__(self, indim, outdim, half_res, leaky=False):
+    super(SimpleBlock, self).__init__()
+    self.indim = indim
+    self.outdim = outdim
+    if self.maml:
+      self.C1 = Conv2d_fw(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1, bias=False)
+      self.BN1 = BatchNorm2d_fw(outdim)
+      self.C2 = Conv2d_fw(outdim, outdim,kernel_size=3, padding=1,bias=False)
+      self.BN2 = FeatureWiseTransformation2d_fw(outdim) # feature-wise transformation at the end of each residual block
+    else:
+      self.C1 = nn.Conv2d(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1, bias=False)
+      self.BN1 = nn.BatchNorm2d(outdim)
+      self.C2 = nn.Conv2d(outdim, outdim,kernel_size=3, padding=1,bias=False)
+      self.BN2 = nn.BatchNorm2d(outdim)
+    self.relu1 = nn.ReLU(inplace=True) if not leaky else nn.LeakyReLU(0.2, inplace=True)
+    self.relu2 = nn.ReLU(inplace=True) if not leaky else nn.LeakyReLU(0.2, inplace=True)
+
+    self.parametrized_layers = [self.C1, self.C2, self.BN1, self.BN2]
+
+    self.half_res = half_res
+
+    # if the input number of channels is not equal to the output, then need a 1x1 convolution
+    if indim!=outdim:
+      if self.maml:
+        self.shortcut = Conv2d_fw(indim, outdim, 1, 2 if half_res else 1, bias=False)
+        self.BNshortcut = FeatureWiseTransformation2d_fw(outdim)
+      else:
+        self.shortcut = nn.Conv2d(indim, outdim, 1, 2 if half_res else 1, bias=False)
+        self.BNshortcut = nn.BatchNorm2d(outdim)
+
+      self.parametrized_layers.append(self.shortcut)
+      self.parametrized_layers.append(self.BNshortcut)
+      self.shortcut_type = '1x1'
+    else:
+      self.shortcut_type = 'identity'
+
+    for layer in self.parametrized_layers:
+      init_layer(layer)
+
+  def forward(self, x):
+    out = self.C1(x)
+    out = self.BN1(out)
+    out = self.relu1(out)
+    out = self.C2(out)
+    out = self.BN2(out)
+    short_out = x if self.shortcut_type == 'identity' else self.BNshortcut(self.shortcut(x))
+    out = out + short_out
+    out = self.relu2(out)
+    return out
+
+# --- ConvNet module ---
+class ConvNet(nn.Module):
+  def __init__(self, depth, flatten = True):
+    super(ConvNet,self).__init__()
+    self.grads = []
+    self.fmaps = []
+    trunk = []
+    for i in range(depth):
+      indim = 3 if i == 0 else 64
+      outdim = 64
+      B = ConvBlock(indim, outdim, pool = ( i <4 ) ) #only pooling for fist 4 layers
+      trunk.append(B)
+
+    if flatten:
+      trunk.append(Flatten())
+
+    self.trunk = nn.Sequential(*trunk)
+    self.final_feat_dim = 1600
+
+  def forward(self,x):
+    out = self.trunk(x)
+    return out
+
+# --- ConvNetNopool module ---
+class ConvNetNopool(nn.Module): #Relation net use a 4 layer conv with pooling in only first two layers, else no pooling
+  def __init__(self, depth):
+    super(ConvNetNopool,self).__init__()
+    self.grads = []
+    self.fmaps = []
+    trunk = []
+    for i in range(depth):
+      indim = 3 if i == 0 else 64
+      outdim = 64
+      B = ConvBlock(indim, outdim, pool = ( i in [0,1] ), padding = 0 if i in[0,1] else 1  ) #only first two layer has pooling and no padding
+      trunk.append(B)
+
+    self.trunk = nn.Sequential(*trunk)
+    self.final_feat_dim = [64,19,19]
+
+  def forward(self,x):
+    out = self.trunk(x)
+    return out
+
+# --- ResNet module ---
+class ResNet(nn.Module):
+  maml = False
+  def __init__(self,block,list_of_num_layers, list_of_out_dims, flatten=True, leakyrelu=False):
+    # list_of_num_layers specifies number of layers in each stage
+    # list_of_out_dims specifies number of output channel for each stage
+    super(ResNet,self).__init__()
+    self.grads = []
+    self.fmaps = []
+    assert len(list_of_num_layers)==4, 'Can have only four stages'
+    if self.maml:
+      conv1 = Conv2d_fw(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+      bn1 = BatchNorm2d_fw(64)
+    else:
+      conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+      bn1 = nn.BatchNorm2d(64)
+
+    relu = nn.ReLU(inplace=True) if not leakyrelu else nn.LeakyReLU(0.2, inplace=True)
+    pool1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+    init_layer(conv1)
+    init_layer(bn1)
+
+    trunk = [conv1, bn1, relu, pool1]
+
+    indim = 64
+    for i in range(4):
+      for j in range(list_of_num_layers[i]):
+        half_res = (i>=1) and (j==0)
+        B = block(indim, list_of_out_dims[i], half_res, leaky=leakyrelu)
+        trunk.append(B)
+        indim = list_of_out_dims[i]
+
+    if flatten:
+      avgpool = nn.AvgPool2d(7)
+      trunk.append(avgpool)
+      trunk.append(Flatten())
+      self.final_feat_dim = indim
+    else:
+      self.final_feat_dim = [ indim, 7, 7]
+
+    self.trunk = nn.Sequential(*trunk)
+
+  def forward(self,x):
+    out = self.trunk(x)
+    return out
+
+# --- Conv networks ---
+def Conv4():
+    return ConvNet(4)
+def Conv6():
+    return ConvNet(6)
+def Conv4NP():
+    return ConvNetNopool(4)
+def Conv6NP():
+    return ConvNetNopool(6)
+
+# --- ResNet networks ---
+def ResNet10(flatten=True, leakyrelu=False):
+    return ResNet(SimpleBlock, [1,1,1,1],[64,128,256,512], flatten, leakyrelu)
+def ResNet18(flatten=True, leakyrelu=False):
+    return ResNet(SimpleBlock, [2,2,2,2],[64,128,256,512], flatten, leakyrelu)
+def ResNet34(flatten=True, leakyrelu=False):
+    return ResNet(SimpleBlock, [3,4,6,3],[64,128,256,512], flatten, leakyrelu)
+
+model_dict = dict(Conv4 = Conv4,
+                  Conv6 = Conv6,
+                  ResNet10 = ResNet10,
+                  ResNet18 = ResNet18,
+                  ResNet34 = ResNet34)
+
+File Path: methods/baselinetrain.py
+Content:
+from methods import backbone
+
+import torch.nn as nn
+from tensorboardX import SummaryWriter
+
+# --- conventional supervised training ---
+class BaselineTrain(nn.Module):
+  def __init__(self, model_func, num_class, tf_path=None, loss_type = 'softmax'):
+    super(BaselineTrain, self).__init__()
+
+    # feature encoder
+    self.feature    = model_func()
+
+    # loss function: use 'dist' to pre-train the encoder for matchingnet, and 'softmax' for others
+    if loss_type == 'softmax':
+      self.classifier = nn.Linear(self.feature.final_feat_dim, num_class)
+      self.classifier.bias.data.fill_(0)
+    elif loss_type == 'dist':
+      self.classifier = backbone.distLinear(self.feature.final_feat_dim, num_class)
+    self.loss_type = loss_type
+    self.loss_fn = nn.CrossEntropyLoss()
+
+    self.num_class = num_class
+    self.tf_writer = SummaryWriter(log_dir=tf_path) if tf_path is not None else None
+
+  def forward(self,x):
+    x = x.cuda()
+    out  = self.feature.forward(x)
+    scores  = self.classifier.forward(out)
+    return scores
+
+  def forward_loss(self, x, y):
+    scores = self.forward(x)
+    y = y.cuda()
+    return self.loss_fn(scores, y )
+
+  def train_loop(self, epoch, train_loader, optimizer, total_it):
+    print_freq = len(train_loader) // 10
+    avg_loss=0
+
+    for i, (x,y) in enumerate(train_loader):
+      optimizer.zero_grad()
+      loss = self.forward_loss(x, y)
+      loss.backward()
+      optimizer.step()
+
+      avg_loss = avg_loss+loss.item()#data[0]
+
+      if (i + 1) % print_freq==0:
+        print('Epoch {:d} | Batch {:d}/{:d} | Loss {:f}'.format(epoch, i + 1, len(train_loader), avg_loss/float(i+1)  ))
+      if (total_it + 1) % 10 == 0:
+        self.tf_writer.add_scalar('loss', loss.item(), total_it + 1)
+      total_it += 1
+    return total_it
+
+  def test_loop(self, val_loader):
+    return -1 #no validation, just save model during iteration
+
+
+File Path: methods/gnn.py
+Content:
+# This code is modified from https://github.com/vgsatorras/few-shot-gnn/blob/master/models/gnn_iclr.py
+
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+import torch.nn.functional as F
+from methods.backbone import Linear_fw, Conv2d_fw, BatchNorm2d_fw, BatchNorm1d_fw
+
+if torch.cuda.is_available():
+  dtype = torch.cuda.FloatTensor
+  dtype_l = torch.cuda.LongTensor
+else:
+  dtype = torch.FloatTensor
+  dtype_l = torch.cuda.LongTensor
+
+def gmul(input):
+  W, x = input
+  # x is a tensor of size (bs, N, num_features)
+  # W is a tensor of size (bs, N, N, J)
+  #x_size = x.size()
+  W_size = W.size()
+  N = W_size[-2]
+  W = W.split(1, 3)
+  W = torch.cat(W, 1).squeeze(3) # W is now a tensor of size (bs, J*N, N)
+  output = torch.bmm(W, x) # output has size (bs, J*N, num_features)
+  output = output.split(N, 1)
+  output = torch.cat(output, 2) # output has size (bs, N, J*num_features)
+  return output
+
+class Gconv(nn.Module):
+  maml = False
+  def __init__(self, nf_input, nf_output, J, bn_bool=True):
+    super(Gconv, self).__init__()
+    self.J = J
+    self.num_inputs = J*nf_input
+    self.num_outputs = nf_output
+    self.fc = nn.Linear(self.num_inputs, self.num_outputs) if not self.maml else Linear_fw(self.num_inputs, self.num_outputs)
+
+    self.bn_bool = bn_bool
+    if self.bn_bool:
+      self.bn = nn.BatchNorm1d(self.num_outputs, track_running_stats=False) if not self.maml else BatchNorm1d_fw(self.num_outputs, track_running_stats=False)
+
+  def forward(self, input):
+    W = input[0]
+    x = gmul(input) # out has size (bs, N, num_inputs)
+    #if self.J == 1:
+    #    x = torch.abs(x)
+    x_size = x.size()
+    x = x.contiguous()
+    x = x.view(-1, self.num_inputs)
+    x = self.fc(x) # has size (bs*N, num_outputs)
+
+    if self.bn_bool:
+      x = self.bn(x)
+    x = x.view(*x_size[:-1], self.num_outputs)
+    return W, x
+
+class Wcompute(nn.Module):
+  maml = False
+  def __init__(self, input_features, nf, operator='J2', activation='softmax', ratio=[2,2,1,1], num_operators=1, drop=False):
+    super(Wcompute, self).__init__()
+    self.num_features = nf
+    self.operator = operator
+    self.conv2d_1 = nn.Conv2d(input_features, int(nf * ratio[0]), 1, stride=1) if not self.maml else Conv2d_fw(input_features, int(nf * ratio[0]), 1, stride=1)
+    self.bn_1 = nn.BatchNorm2d(int(nf * ratio[0]), track_running_stats=False) if not self.maml else BatchNorm2d_fw(int(nf * ratio[0]), track_running_stats=False)
+    self.drop = drop
+    if self.drop:
+      self.dropout = nn.Dropout(0.3)
+    self.conv2d_2 = nn.Conv2d(int(nf * ratio[0]), int(nf * ratio[1]), 1, stride=1) if not self.maml else Conv2d_fw(int(nf * ratio[0]), int(nf * ratio[1]), 1, stride=1)
+    self.bn_2 = nn.BatchNorm2d(int(nf * ratio[1]), track_running_stats=False) if not self.maml else BatchNorm2d_fw(int(nf * ratio[1]), track_running_stats=False)
+    self.conv2d_3 = nn.Conv2d(int(nf * ratio[1]), nf*ratio[2], 1, stride=1) if not self.maml else Conv2d_fw(int(nf * ratio[1]), nf*ratio[2], 1, stride=1)
+    self.bn_3 = nn.BatchNorm2d(nf*ratio[2], track_running_stats=False) if not self.maml else BatchNorm2d_fw(nf*ratio[2], track_running_stats=False)
+    self.conv2d_4 = nn.Conv2d(nf*ratio[2], nf*ratio[3], 1, stride=1) if not self.maml else Conv2d_fw(nf*ratio[2], nf*ratio[3], 1, stride=1)
+    self.bn_4 = nn.BatchNorm2d(nf*ratio[3], track_running_stats=False) if not self.maml else BatchNorm2d_fw(nf*ratio[3], track_running_stats=False)
+    self.conv2d_last = nn.Conv2d(nf, num_operators, 1, stride=1) if not self.maml else Conv2d_fw(nf, num_operators, 1, stride=1)
+    self.activation = activation
+
+  def forward(self, x, W_id):
+    W1 = x.unsqueeze(2)
+    W2 = torch.transpose(W1, 1, 2) #size: bs x N x N x num_features
+    W_new = torch.abs(W1 - W2) #size: bs x N x N x num_features
+    W_new = torch.transpose(W_new, 1, 3) #size: bs x num_features x N x N
+
+    W_new = self.conv2d_1(W_new)
+    W_new = self.bn_1(W_new)
+    W_new = F.leaky_relu(W_new)
+    if self.drop:
+      W_new = self.dropout(W_new)
+
+    W_new = self.conv2d_2(W_new)
+    W_new = self.bn_2(W_new)
+    W_new = F.leaky_relu(W_new)
+
+    W_new = self.conv2d_3(W_new)
+    W_new = self.bn_3(W_new)
+    W_new = F.leaky_relu(W_new)
+
+    W_new = self.conv2d_4(W_new)
+    W_new = self.bn_4(W_new)
+    W_new = F.leaky_relu(W_new)
+
+    W_new = self.conv2d_last(W_new)
+    W_new = torch.transpose(W_new, 1, 3) #size: bs x N x N x 1
+
+    if self.activation == 'softmax':
+      W_new = W_new - W_id.expand_as(W_new) * 1e8
+      W_new = torch.transpose(W_new, 2, 3)
+      # Applying Softmax
+      W_new = W_new.contiguous()
+      W_new_size = W_new.size()
+      W_new = W_new.view(-1, W_new.size(3))
+      W_new = F.softmax(W_new, dim=1)
+      W_new = W_new.view(W_new_size)
+      # Softmax applied
+      W_new = torch.transpose(W_new, 2, 3)
+
+    elif self.activation == 'sigmoid':
+      W_new = F.sigmoid(W_new)
+      W_new *= (1 - W_id)
+    elif self.activation == 'none':
+      W_new *= (1 - W_id)
+    else:
+      raise (NotImplementedError)
+
+    if self.operator == 'laplace':
+      W_new = W_id - W_new
+    elif self.operator == 'J2':
+      W_new = torch.cat([W_id, W_new], 3)
+    else:
+      raise(NotImplementedError)
+
+    return W_new
+
+class GNN_nl(nn.Module):
+  def __init__(self, input_features, nf, train_N_way):
+    super(GNN_nl, self).__init__()
+    self.input_features = input_features
+    self.nf = nf
+    self.num_layers = 2
+
+    for i in range(self.num_layers):
+      if i == 0:
+        module_w = Wcompute(self.input_features, nf, operator='J2', activation='softmax', ratio=[2, 2, 1, 1])
+        module_l = Gconv(self.input_features, int(nf / 2), 2)
+      else:
+        module_w = Wcompute(self.input_features + int(nf / 2) * i, nf, operator='J2', activation='softmax', ratio=[2, 2, 1, 1])
+        module_l = Gconv(self.input_features + int(nf / 2) * i, int(nf / 2), 2)
+      self.add_module('layer_w{}'.format(i), module_w)
+      self.add_module('layer_l{}'.format(i), module_l)
+
+    self.w_comp_last = Wcompute(self.input_features + int(self.nf / 2) * self.num_layers, nf, operator='J2', activation='softmax', ratio=[2, 2, 1, 1])
+    self.layer_last = Gconv(self.input_features + int(self.nf / 2) * self.num_layers, train_N_way, 2, bn_bool=False)
+
+  def forward(self, x):
+    W_init = torch.eye(x.size(1), device=x.device).unsqueeze(0).repeat(x.size(0), 1, 1).unsqueeze(3)
+
+    for i in range(self.num_layers):
+      Wi = self._modules['layer_w{}'.format(i)](x, W_init)
+
+      x_new = F.leaky_relu(self._modules['layer_l{}'.format(i)]([Wi, x])[1])
+      x = torch.cat([x, x_new], 2)
+
+    Wl=self.w_comp_last(x, W_init)
+    out = self.layer_last([Wl, x])[1]
+
+    return out
+
+File Path: methods/gnnnet.py
+Content:
+import torch
+import torch.nn as nn
+import numpy as np
+from methods.meta_template import MetaTemplate
+from methods.gnn import GNN_nl
+from methods import backbone
+
+class GnnNet(MetaTemplate):
+  maml=False
+  def __init__(self, model_func,  n_way, n_support, tf_path=None):
+    super(GnnNet, self).__init__(model_func, n_way, n_support, tf_path=tf_path)
+
+    # loss function
+    self.loss_fn = nn.CrossEntropyLoss()
+
+    # metric function
+    self.fc = nn.Sequential(nn.Linear(self.feat_dim, 128), nn.BatchNorm1d(128, track_running_stats=False)) if not self.maml else nn.Sequential(backbone.Linear_fw(self.feat_dim, 128), backbone.BatchNorm1d_fw(128, track_running_stats=False))
+    self.gnn = GNN_nl(128 + self.n_way, 96, self.n_way)
+    self.method = 'GnnNet'
+
+    # fix label for training the metric function   1*nw(1 + ns)*nw
+    support_label = torch.from_numpy(np.repeat(range(self.n_way), self.n_support)).unsqueeze(1)
+    support_label = torch.zeros(self.n_way*self.n_support, self.n_way).scatter(1, support_label, 1).view(self.n_way, self.n_support, self.n_way)
+    support_label = torch.cat([support_label, torch.zeros(self.n_way, 1, n_way)], dim=1)
+    self.support_label = support_label.view(1, -1, self.n_way)
+
+  def cuda(self):
+    self.feature.cuda()
+    self.fc.cuda()
+    self.gnn.cuda()
+    self.support_label = self.support_label.cuda()
+    return self
+
+  def set_forward(self,x,is_feature=False):
+    x = x.cuda()
+
+    if is_feature:
+      # reshape the feature tensor: n_way * n_s + 15 * f
+      assert(x.size(1) == self.n_support + 15)
+      z = self.fc(x.view(-1, *x.size()[2:]))
+      z = z.view(self.n_way, -1, z.size(1))
+    else:
+      # get feature using encoder
+      x = x.view(-1, *x.size()[2:])
+      z = self.fc(self.feature(x))
+      z = z.view(self.n_way, -1, z.size(1))
+
+    # stack the feature for metric function: n_way * n_s + n_q * f -> n_q * [1 * n_way(n_s + 1) * f]
+    z_stack = [torch.cat([z[:, :self.n_support], z[:, self.n_support + i:self.n_support + i + 1]], dim=1).view(1, -1, z.size(2)) for i in range(self.n_query)]
+    assert(z_stack[0].size(1) == self.n_way*(self.n_support + 1))
+    scores = self.forward_gnn(z_stack)
+    return scores
+
+  def forward_gnn(self, zs):
+    # gnn inp: n_q * n_way(n_s + 1) * f
+    nodes = torch.cat([torch.cat([z, self.support_label], dim=2) for z in zs], dim=0)
+    scores = self.gnn(nodes)
+
+    # n_q * n_way(n_s + 1) * n_way -> (n_way * n_q) * n_way
+    scores = scores.view(self.n_query, self.n_way, self.n_support + 1, self.n_way)[:, :, -1].permute(1, 0, 2).contiguous().view(-1, self.n_way)
+    return scores
+
+  def set_forward_loss(self, x):
+    y_query = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query))
+    y_query = y_query.cuda()
+    scores = self.set_forward(x)
+    loss = self.loss_fn(scores, y_query)
+    return scores, loss
+
+File Path: methods/matchingnet.py
+Content:
+# This code is modified from https://github.com/facebookresearch/low-shot-shrink-hallucinate
+
+from methods import backbone
+import torch
+import torch.nn as nn
+import numpy as np
+from methods.meta_template import MetaTemplate
+import utils
+
+class MatchingNet(MetaTemplate):
+  def __init__(self, model_func,  n_way, n_support, tf_path=None):
+    super(MatchingNet, self).__init__( model_func,  n_way, n_support, tf_path=tf_path)
+
+    # loss function
+    self.loss_fn    = nn.NLLLoss()
+
+    # metric
+    self.FCE = FullyContextualEmbedding(self.feat_dim)
+    self.G_encoder = backbone.LSTM(self.feat_dim, self.feat_dim, 1, batch_first=True, bidirectional=True)
+
+    self.relu = nn.ReLU()
+    self.softmax = nn.Softmax(dim=1)
+    self.method = 'MatchingNet'
+
+  def encode_training_set(self, S, G_encoder = None):
+    if G_encoder is None:
+      G_encoder = self.G_encoder
+    out_G = G_encoder(S.unsqueeze(0))
+    out_G = out_G.squeeze(0)
+    G = S + out_G[:,:S.size(1)] + out_G[:,S.size(1):]
+    G_norm = torch.norm(G,p=2, dim =1).unsqueeze(1).expand_as(G)
+    G_normalized = G.div(G_norm+ 0.00001)
+    return G, G_normalized
+
+  def get_logprobs(self, f, G, G_normalized, Y_S, FCE = None):
+    if FCE is None:
+      FCE = self.FCE
+    F = FCE(f, G)
+    F_norm = torch.norm(F,p=2, dim =1).unsqueeze(1).expand_as(F)
+    F_normalized = F.div(F_norm + 0.00001)
+    scores = self.relu( F_normalized.mm(G_normalized.transpose(0,1))  ) *100 # The original paper use cosine simlarity, but here we scale it by 100 to strengthen highest probability after softmax
+    softmax = self.softmax(scores)
+    logprobs =(softmax.mm(Y_S)+1e-6).log()
+    return logprobs
+
+  def set_forward(self, x, is_feature = False):
+    z_support, z_query  = self.parse_feature(x,is_feature)
+
+    z_support   = z_support.contiguous().view( self.n_way* self.n_support, -1 )
+    z_query     = z_query.contiguous().view( self.n_way* self.n_query, -1 )
+    G, G_normalized = self.encode_training_set( z_support)
+
+    y_s         = torch.from_numpy(np.repeat(range( self.n_way ), self.n_support ))
+    Y_S         = utils.one_hot(y_s, self.n_way).cuda()
+    f           = z_query
+    logprobs = self.get_logprobs(f, G, G_normalized, Y_S)
+    return logprobs
+
+  def set_forward_loss(self, x):
+    y_query = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
+    y_query = y_query.cuda()
+
+    logprobs = self.set_forward(x)
+    loss = self.loss_fn(logprobs, y_query)
+
+    return logprobs, loss
+
+  def cuda(self):
+    super(MatchingNet, self).cuda()
+    self.FCE = self.FCE.cuda()
+    return self
+
+# --- Fully contextual embedding function adopted in Matchingnet ---
+class FullyContextualEmbedding(nn.Module):
+  def __init__(self, feat_dim):
+    super(FullyContextualEmbedding, self).__init__()
+    self.lstmcell = backbone.LSTMCell(feat_dim*2, feat_dim)
+    self.softmax = nn.Softmax(dim=1)
+    self.c_0 = torch.zeros(1, feat_dim)
+    self.feat_dim = feat_dim
+
+  def forward(self, f, G):
+    h = f
+    c = self.c_0.expand_as(f)
+    G_T = G.transpose(0,1)
+    K = G.size(0) #Tuna to be comfirmed
+    for k in range(K):
+      logit_a = h.mm(G_T)
+      a = self.softmax(logit_a)
+      r = a.mm(G)
+      x = torch.cat((f, r),1)
+
+      h, c = self.lstmcell(x, (h, c))
+      h = h + f
+    return h
+
+  def cuda(self):
+    super(FullyContextualEmbedding, self).cuda()
+    self.c_0 = self.c_0.cuda()
+    return self
+
+
+File Path: methods/meta_template.py
+Content:
+import torch.nn as nn
+import numpy as np
+from abc import abstractmethod
+from tensorboardX import SummaryWriter
+
+class MetaTemplate(nn.Module):
+  def __init__(self, model_func, n_way, n_support, flatten=True, leakyrelu=False, tf_path=None, change_way=True):
+    super(MetaTemplate, self).__init__()
+    self.n_way      = n_way
+    self.n_support  = n_support
+    self.n_query    = -1 #(change depends on input)
+    self.feature    = model_func(flatten=flatten, leakyrelu=leakyrelu)
+    self.feat_dim   = self.feature.final_feat_dim
+    self.change_way = change_way  #some methods allow different_way classification during training and test
+    self.tf_writer = SummaryWriter(log_dir=tf_path) if tf_path is not None else None
+
+  @abstractmethod
+  def set_forward(self,x,is_feature):
+    pass
+
+  @abstractmethod
+  def set_forward_loss(self, x):
+    pass
+
+  def forward(self,x):
+    out  = self.feature.forward(x)
+    return out
+
+  def parse_feature(self,x,is_feature):
+    x = x.cuda()
+    if is_feature:
+      z_all = x
+    else:
+      x           = x.contiguous().view( self.n_way * (self.n_support + self.n_query), *x.size()[2:])
+      z_all       = self.feature.forward(x)
+      z_all       = z_all.view( self.n_way, self.n_support + self.n_query, -1)
+    z_support   = z_all[:, :self.n_support]
+    z_query     = z_all[:, self.n_support:]
+
+    return z_support, z_query
+
+  def correct(self, x):
+    scores, loss = self.set_forward_loss(x)
+    y_query = np.repeat(range( self.n_way ), self.n_query )
+
+    topk_scores, topk_labels = scores.data.topk(1, 1, True, True)
+    topk_ind = topk_labels.cpu().numpy()
+    top1_correct = np.sum(topk_ind[:,0] == y_query)
+    return float(top1_correct), len(y_query), loss.item()*len(y_query)
+
+  def train_loop(self, epoch, train_loader, optimizer, total_it):
+    print_freq = len(train_loader) // 10
+    avg_loss=0
+    for i, (x,_ ) in enumerate(train_loader):
+      self.n_query = x.size(1) - self.n_support
+      if self.change_way:
+        self.n_way  = x.size(0)
+      optimizer.zero_grad()
+      _, loss = self.set_forward_loss(x)
+      loss.backward()
+      optimizer.step()
+      avg_loss = avg_loss+loss.item()
+
+      if (i + 1) % print_freq==0:
+        print('Epoch {:d} | Batch {:d}/{:d} | Loss {:f}'.format(epoch, i + 1, len(train_loader), avg_loss/float(i+1)))
+      if (total_it + 1) % 10 == 0 and self.tf_writer is not None:
+        self.tf_writer.add_scalar(self.method + '/query_loss', loss.item(), total_it + 1)
+      total_it += 1
+    return total_it
+
+  def test_loop(self, test_loader, record = None):
+    loss = 0.
+    count = 0
+    acc_all = []
+
+    iter_num = len(test_loader)
+    for i, (x,_) in enumerate(test_loader):
+      self.n_query = x.size(1) - self.n_support
+      if self.change_way:
+        self.n_way  = x.size(0)
+      correct_this, count_this, loss_this = self.correct(x)
+      acc_all.append(correct_this/ count_this*100  )
+      loss += loss_this
+      count += count_this
+
+    acc_all  = np.asarray(acc_all)
+    acc_mean = np.mean(acc_all)
+    acc_std  = np.std(acc_all)
+    print('--- %d Loss = %.6f ---' %(iter_num,  loss/count))
+    print('--- %d Test Acc = %4.2f%% +- %4.2f%% ---' %(iter_num,  acc_mean, 1.96* acc_std/np.sqrt(iter_num)))
+
+    return acc_mean
+
+File Path: methods/protonet.py
+Content:
+# This code is modified from https://github.com/jakesnell/prototypical-networks
+
+import torch
+import torch.nn as nn
+import numpy as np
+from methods.meta_template import MetaTemplate
+
+class ProtoNet(MetaTemplate):
+  def __init__(self, model_func,  n_way, n_support, tf_path=None):
+    super(ProtoNet, self).__init__(model_func,  n_way, n_support, tf_path=tf_path)
+    self.loss_fn = nn.CrossEntropyLoss()
+    self.method = 'ProtoNet'
+
+  def reset_modules(self):
+    return
+
+  def set_forward(self,x,is_feature=False):
+    z_support, z_query  = self.parse_feature(x,is_feature)
+    z_support   = z_support.contiguous()
+    z_proto     = z_support.view(self.n_way, self.n_support, -1 ).mean(1) #the shape of z is [n_data, n_dim]
+    z_query     = z_query.contiguous().view(self.n_way* self.n_query, -1 )
+
+    dists = euclidean_dist(z_query, z_proto)
+    scores = -dists
+    return scores
+
+  def get_distance(self,x,is_feature = False):
+    z_support, z_query  = self.parse_feature(x,is_feature)
+    z_support   = z_support.contiguous()
+    z_proto     = z_support.view(self.n_way, self.n_support, -1 ).mean(1) #the shape of z is [n_data, n_dim]
+    z_query     = z_query.contiguous().view(self.n_way* self.n_query, -1 )
+    return euclidean_dist(z_proto, z_proto)[0, :5].cpu().numpy()
+
+  def set_forward_loss(self, x):
+    y_query = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
+    y_query = y_query.cuda()
+    scores = self.set_forward(x)
+    loss = self.loss_fn(scores, y_query)
+    return scores, loss
+
+
+def euclidean_dist( x, y):
+  # x: N x D
+  # y: M x D
+  n = x.size(0)
+  m = y.size(0)
+  d = x.size(1)
+  assert d == y.size(1)
+
+  x = x.unsqueeze(1).expand(n, m, d)
+  y = y.unsqueeze(0).expand(n, m, d)
+
+  return torch.pow(x - y, 2).sum(2)
+
+File Path: methods/relationnet.py
+Content:
+# This code is modified from https://github.com/floodsung/LearningToCompare_FSL
+
+from methods import backbone
+import torch
+import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
+from methods.meta_template import MetaTemplate
+import utils
+
+class RelationNet(MetaTemplate):
+  def __init__(self, model_func,  n_way, n_support, tf_path=None, loss_type = 'mse'):
+    super(RelationNet, self).__init__(model_func,  n_way, n_support, flatten=False, tf_path=tf_path)
+
+    # loss function
+    self.loss_type = loss_type  #'softmax' or 'mse'
+    if self.loss_type == 'mse':
+      self.loss_fn = nn.MSELoss()
+    else:
+      self.loss_fn = nn.CrossEntropyLoss()
+
+    # metric function
+    self.relation_module = RelationModule( self.feat_dim , 8, self.loss_type ) #relation net features are not pooled, so self.feat_dim is [dim, w, h]
+    self.method = 'RelationNet'
+
+  def set_forward(self,x,is_feature = False):
+
+    # get features
+    z_support, z_query  = self.parse_feature(x,is_feature)
+    z_support   = z_support.contiguous()
+    z_proto     = z_support.view( self.n_way, self.n_support, *self.feat_dim ).mean(1)
+    z_query     = z_query.contiguous().view( self.n_way* self.n_query, *self.feat_dim )
+
+    # get relations with metric function
+    z_proto_ext = z_proto.unsqueeze(0).repeat(self.n_query* self.n_way,1,1,1,1)
+    z_query_ext = z_query.unsqueeze(0).repeat( self.n_way,1,1,1,1)
+    z_query_ext = torch.transpose(z_query_ext,0,1)
+    extend_final_feat_dim = self.feat_dim.copy()
+    extend_final_feat_dim[0] *= 2
+    relation_pairs = torch.cat((z_proto_ext,z_query_ext),2).view(-1, *extend_final_feat_dim)
+    relations = self.relation_module(relation_pairs).view(-1, self.n_way)
+    return relations
+
+  def set_forward_loss(self, x):
+    y = torch.from_numpy(np.repeat(range( self.n_way ), self.n_query ))
+
+    scores = self.set_forward(x)
+    if self.loss_type == 'mse':
+      y_oh = utils.one_hot(y, self.n_way)
+      y_oh = y_oh.cuda()
+      loss = self.loss_fn(scores, y_oh)
+    else:
+      y = y.cuda()
+      loss = self.loss_fn(scores, y)
+    return scores, loss
+
+# --- Convolution block used in the relation module ---
+class RelationConvBlock(nn.Module):
+  maml = False
+  def __init__(self, indim, outdim, padding = 0):
+    super(RelationConvBlock, self).__init__()
+    self.indim  = indim
+    self.outdim = outdim
+    if self.maml:
+      self.C      = backbone.Conv2d_fw(indim, outdim, 3, padding=padding)
+      self.BN     = backbone.BatchNorm2d_fw(outdim, momentum=1, track_running_stats=False)
+    else:
+      self.C      = nn.Conv2d(indim, outdim, 3, padding = padding )
+      self.BN     = nn.BatchNorm2d(outdim, momentum=1, affine=True, track_running_stats=False)
+    self.relu   = nn.ReLU()
+    self.pool   = nn.MaxPool2d(2)
+
+    self.parametrized_layers = [self.C, self.BN, self.relu, self.pool]
+
+    for layer in self.parametrized_layers:
+      backbone.init_layer(layer)
+
+    self.trunk = nn.Sequential(*self.parametrized_layers)
+
+  def forward(self,x):
+    out = self.trunk(x)
+    return out
+
+# --- Relation module adopted in RelationNet ---
+class RelationModule(nn.Module):
+  maml = False
+  def __init__(self,input_size,hidden_size, loss_type = 'mse'):
+    super(RelationModule, self).__init__()
+
+    self.loss_type = loss_type
+    padding = 1 if ( input_size[1] <10 ) and ( input_size[2] <10 ) else 0 # when using Resnet, conv map without avgpooling is 7x7, need padding in block to do pooling
+
+    self.layer1 = RelationConvBlock(input_size[0]*2, input_size[0], padding = padding )
+    self.layer2 = RelationConvBlock(input_size[0], input_size[0], padding = padding )
+
+    shrink_s = lambda s: int((int((s- 2 + 2*padding)/2)-2 + 2*padding)/2)
+
+    if self.maml:
+      self.fc1 = backbone.Linear_fw( input_size[0]* shrink_s(input_size[1]) * shrink_s(input_size[2]), hidden_size )
+      self.fc2 = backbone.Linear_fw( hidden_size,1)
+    else:
+      self.fc1 = nn.Linear( input_size[0]* shrink_s(input_size[1]) * shrink_s(input_size[2]), hidden_size )
+      self.fc2 = nn.Linear( hidden_size,1)
+
+  def forward(self,x):
+    out = self.layer1(x)
+    out = self.layer2(out)
+    out = out.view(out.size(0),-1)
+    out = F.relu(self.fc1(out))
+    if self.loss_type == 'mse':
+      out = torch.sigmoid(self.fc2(out))
+    elif self.loss_type == 'softmax':
+      out = self.fc2(out)
+
+    return out
+
+File Path: options.py
+Content:
+import numpy as np
+import os
+import glob
+import torch
+import argparse
+
+def parse_args(script):
+  parser = argparse.ArgumentParser(description= 'few-shot script %s' %(script))
+  parser.add_argument('--dataset', default='multi', help='miniImagenet/cub/cars/places/plantae, specify multi for training with multiple domains')
+  parser.add_argument('--testset', default='cub', help='cub/cars/places/plantae, valid only when dataset=multi')
+  parser.add_argument('--model', default='ResNet10', help='model: Conv{4|6} / ResNet{10|18|34}') # we use ResNet10 in the paper
+  parser.add_argument('--method', default='baseline',   help='baseline/baseline++/protonet/matchingnet/relationnet{_softmax}/gnnnet')
+  parser.add_argument('--train_n_way' , default=5, type=int,  help='class num to classify for training')
+  parser.add_argument('--test_n_way'  , default=5, type=int,  help='class num to classify for testing (validation) ')
+  parser.add_argument('--n_shot'      , default=5, type=int,  help='number of labeled data in each class, same as n_support')
+  parser.add_argument('--train_aug'   , action='store_true',  help='perform data augmentation or not during training ')
+  parser.add_argument('--name'        , default='tmp', type=str, help='')
+  parser.add_argument('--save_dir'    , default='./output', type=str, help='')
+  parser.add_argument('--data_dir'    , default='./filelists', type=str, help='')
+
+  if script == 'train':
+    parser.add_argument('--num_classes' , default=200, type=int, help='total number of classes in softmax, only used in baseline')
+    parser.add_argument('--save_freq'   , default=25, type=int, help='Save frequency')
+    parser.add_argument('--start_epoch' , default=0, type=int,help ='Starting epoch')
+    parser.add_argument('--stop_epoch'  , default=400, type=int, help ='Stopping epoch')
+    parser.add_argument('--resume'      , default='', type=str, help='continue from previous trained model with largest epoch')
+    parser.add_argument('--resume_epoch', default=-1, type=int, help='')
+    parser.add_argument('--warmup'      , default='gg3b0', type=str, help='continue from baseline, neglected if resume is true')
+  elif script == 'test':
+    parser.add_argument('--split'       , default='novel', help='base/val/novel')
+    parser.add_argument('--save_epoch', default=400, type=int,help ='load the model trained in x epoch, use the best model if x is -1')
+  else:
+    raise ValueError('Unknown script')
+
+  return parser.parse_args()
+
+def get_assigned_file(checkpoint_dir,num):
+  assign_file = os.path.join(checkpoint_dir, '{:d}.tar'.format(num))
+  return assign_file
+
+def get_resume_file(checkpoint_dir, resume_epoch=-1):
+  filelist = glob.glob(os.path.join(checkpoint_dir, '*.tar'))
+  if len(filelist) == 0:
+    return None
+
+  filelist =  [ x  for x in filelist if os.path.basename(x) != 'best_model.tar' ]
+  epochs = np.array([int(os.path.splitext(os.path.basename(x))[0]) for x in filelist])
+  max_epoch = np.max(epochs)
+  epoch = max_epoch if resume_epoch == -1 else resume_epoch
+  resume_file = os.path.join(checkpoint_dir, '{:d}.tar'.format(epoch))
+  return resume_file
+
+def get_best_file(checkpoint_dir):
+  best_file = os.path.join(checkpoint_dir, 'best_model.tar')
+  if os.path.isfile(best_file):
+    return best_file
+  else:
+    return get_resume_file(checkpoint_dir)
+
+def load_warmup_state(filename, method):
+  print('  load pre-trained model file: {}'.format(filename))
+  warmup_resume_file = get_resume_file(filename)
+  tmp = torch.load(warmup_resume_file)
+  if tmp is not None:
+    state = tmp['state']
+    state_keys = list(state.keys())
+    for i, key in enumerate(state_keys):
+      if 'relationnet' in method and "feature." in key:
+        newkey = key.replace("feature.","")
+        state[newkey] = state.pop(key)
+      elif method == 'gnnnet' and 'feature.' in key:
+        newkey = key.replace("feature.","")
+        state[newkey] = state.pop(key)
+      elif method == 'matchingnet' and 'feature.' in key and '.7.' not in key:
+        newkey = key.replace("feature.","")
+        state[newkey] = state.pop(key)
+      else:
+        state.pop(key)
+  else:
+    raise ValueError(' No pre-trained encoder file found!')
+  return state
+
+
+File Path: output/checkpoints/download_encoders.py
+Content:
+from subprocess import call
+
+call('wget http://vllab.ucmerced.edu/ym41608/projects/CrossDomainFewShot/checkpoints/baseline.tar.gz', shell=True)
+call('wget http://vllab.ucmerced.edu/ym41608/projects/CrossDomainFewShot/checkpoints/baseline++.tar.gz', shell=True)
+call('tar -zxf baseline.tar.gz', shell=True)
+call('tar -zxf baseline++.tar.gz', shell=True)
+call('rm baseline.tar.gz', shell=True)
+call('rm baseline++.tar.gz', shell=True)
+
+File Path: output/checkpoints/download_models.py
+Content:
+from subprocess import call
+import sys
+
+# current available models:
+
+if len(sys.argv) != 6:
+  raise Exception('Incorrect command! e.g., python3 download_models.py [cub/cars/places/plantae] [1/5] [matchingnet/relationnet/gnnnet]')
+
+testset = sys.argv[1]
+shot = sys.argv[2]
+model = sys.argv[3]
+
+filename = 'multi_' + testset + '_' + shot + '_lft_' + model + '.tar.gz'
+
+call('wget http://vllab.ucmerced.edu/ym41608/projects/CrossDomainFewShot/checkpoints/' + filename, shell=True)
+call('tar -zxf ' + filename, shell=True)
+call('rm ' + filename, shell=True)
+
+File Path: test.py
+Content:
+import torch
+import os
+import h5py
+
+from methods import backbone
+from methods.backbone import model_dict
+from data.datamgr import SimpleDataManager
+from options import parse_args, get_best_file, get_assigned_file
+
+from methods.protonet import ProtoNet
+from methods.matchingnet import MatchingNet
+from methods.gnnnet import GnnNet
+from methods.relationnet import RelationNet
+import data.feature_loader as feat_loader
+import random
+import numpy as np
+
+# extract and save image features
+def save_features(model, data_loader, featurefile):
+  f = h5py.File(featurefile, 'w')
+  max_count = len(data_loader)*data_loader.batch_size
+  all_labels = f.create_dataset('all_labels',(max_count,), dtype='i')
+  all_feats=None
+  count=0
+  for i, (x,y) in enumerate(data_loader):
+    if (i % 10) == 0:
+      print('    {:d}/{:d}'.format(i, len(data_loader)))
+    x = x.cuda()
+    feats = model(x)
+    if all_feats is None:
+      all_feats = f.create_dataset('all_feats', [max_count] + list( feats.size()[1:]) , dtype='f')
+    all_feats[count:count+feats.size(0)] = feats.data.cpu().numpy()
+    all_labels[count:count+feats.size(0)] = y.cpu().numpy()
+    count = count + feats.size(0)
+
+  count_var = f.create_dataset('count', (1,), dtype='i')
+  count_var[0] = count
+  f.close()
+
+# evaluate using features
+def feature_evaluation(cl_data_file, model, n_way = 5, n_support = 5, n_query = 15):
+  class_list = cl_data_file.keys()
+  select_class = random.sample(class_list,n_way)
+  z_all  = []
+  for cl in select_class:
+    img_feat = cl_data_file[cl]
+    perm_ids = np.random.permutation(len(img_feat)).tolist()
+    z_all.append( [ np.squeeze( img_feat[perm_ids[i]]) for i in range(n_support+n_query) ] )
+  z_all = torch.from_numpy(np.array(z_all) )
+
+  model.n_query = n_query
+  scores  = model.set_forward(z_all, is_feature = True)
+  pred = scores.data.cpu().numpy().argmax(axis = 1)
+  y = np.repeat(range( n_way ), n_query )
+  acc = np.mean(pred == y)*100
+  return acc
+
+# --- main ---
+if __name__ == '__main__':
+
+  # parse argument
+  params = parse_args('test')
+  print('Testing! {} shots on {} dataset with {} epochs of {}({})'.format(params.n_shot, params.dataset, params.save_epoch, params.name, params.method))
+  remove_featurefile = True
+
+  print('\nStage 1: saving features')
+  # dataset
+  print('  build dataset')
+  if 'Conv' in params.model:
+    image_size = 84
+  else:
+    image_size = 224
+  split = params.split
+  loadfile = os.path.join(params.data_dir, params.dataset, split + '.json')
+  datamgr         = SimpleDataManager(image_size, batch_size = 64)
+  data_loader      = datamgr.get_data_loader(loadfile, aug = False)
+
+  print('  build feature encoder')
+  # feature encoder
+  checkpoint_dir = '%s/checkpoints/%s'%(params.save_dir, params.name)
+  if params.save_epoch != -1:
+    modelfile   = get_assigned_file(checkpoint_dir,params.save_epoch)
+  else:
+    modelfile   = get_best_file(checkpoint_dir)
+  if params.method in ['relationnet', 'relationnet_softmax']:
+    if params.model == 'Conv4':
+      model = backbone.Conv4NP()
+    elif params.model == 'Conv6':
+      model = backbone.Conv6NP()
+    else:
+      model = model_dict[params.model]( flatten = False )
+  else:
+    model = model_dict[params.model]()
+  model = model.cuda()
+  tmp = torch.load(modelfile)
+  try:
+    state = tmp['state']
+  except KeyError:
+    state = tmp['model_state']
+  except:
+    raise
+  state_keys = list(state.keys())
+  for i, key in enumerate(state_keys):
+    if "feature." in key and not 'gamma' in key and not 'beta' in key:
+      newkey = key.replace("feature.","")
+      state[newkey] = state.pop(key)
+    else:
+      state.pop(key)
+
+  model.load_state_dict(state)
+  model.eval()
+
+  # save feature file
+  print('  extract and save features...')
+  if params.save_epoch != -1:
+    featurefile = os.path.join( checkpoint_dir.replace("checkpoints","features"), split + "_" + str(params.save_epoch)+ ".hdf5")
+  else:
+    featurefile = os.path.join( checkpoint_dir.replace("checkpoints","features"), split + ".hdf5")
+  dirname = os.path.dirname(featurefile)
+  if not os.path.isdir(dirname):
+    os.makedirs(dirname)
+  save_features(model, data_loader, featurefile)
+
+  print('\nStage 2: evaluate')
+  acc_all = []
+  iter_num = 1000
+  few_shot_params = dict(n_way = params.test_n_way , n_support = params.n_shot)
+  # model
+  print('  build metric-based model')
+  if params.method == 'protonet':
+    model = ProtoNet( model_dict[params.model], **few_shot_params)
+  elif params.method == 'matchingnet':
+    model = MatchingNet( model_dict[params.model], **few_shot_params )
+  elif params.method == 'gnnnet':
+    model = GnnNet( model_dict[params.model], **few_shot_params)
+  elif params.method in ['relationnet', 'relationnet_softmax']:
+    if params.model == 'Conv4':
+      feature_model = backbone.Conv4NP
+    elif params.model == 'Conv6':
+      feature_model = backbone.Conv6NP
+    else:
+      feature_model = model_dict[params.model]
+    loss_type = 'mse' if params.method == 'relationnet' else 'softmax'
+    model = RelationNet( feature_model, loss_type = loss_type , **few_shot_params )
+  else:
+    raise ValueError('Unknown method')
+  model = model.cuda()
+  model.eval()
+
+  # load model
+  checkpoint_dir = '%s/checkpoints/%s'%(params.save_dir, params.name)
+  if params.save_epoch != -1:
+    modelfile = get_assigned_file(checkpoint_dir, params.save_epoch)
+  else:
+    modelfile = get_best_file(checkpoint_dir)
+  if modelfile is not None:
+    tmp = torch.load(modelfile)
+    try:
+      model.load_state_dict(tmp['state'])
+    except RuntimeError:
+      print('warning! RuntimeError when load_state_dict()!')
+      model.load_state_dict(tmp['state'], strict=False)
+    except KeyError:
+      for k in tmp['model_state']:   ##### revise latter
+        if 'running' in k:
+          tmp['model_state'][k] = tmp['model_state'][k].squeeze()
+      model.load_state_dict(tmp['model_state'], strict=False)
+    except:
+      raise
+
+  # load feature file
+  print('  load saved feature file')
+  cl_data_file = feat_loader.init_loader(featurefile)
+
+  # start evaluate
+  print('  evaluate')
+  for i in range(iter_num):
+    acc = feature_evaluation(cl_data_file, model, n_query=15, **few_shot_params)
+    acc_all.append(acc)
+
+  # statics
+  print('  get statics')
+  acc_all = np.asarray(acc_all)
+  acc_mean = np.mean(acc_all)
+  acc_std = np.std(acc_all)
+  print('  %d test iterations: Acc = %4.2f%% +- %4.2f%%' %(iter_num, acc_mean, 1.96* acc_std/np.sqrt(iter_num)))
+
+  # remove feature files [optional]
+  if remove_featurefile:
+    os.remove(featurefile)
+
+File Path: train.py
+Content:
+import numpy as np
+import os
+import random
+import torch
+from data.datamgr import SetDataManager, SimpleDataManager
+from options import parse_args, get_resume_file, load_warmup_state
+from methods.LFTNet import LFTNet
+
+def cycle(iterable):
+  while True:
+    for x in iterable:
+      yield x
+
+# training iterations
+def train(base_datamgr, base_set, aux_iter, val_loader, model, start_epoch, stop_epoch, params):
+
+  # for validation
+  max_acc = 0
+  total_it = 0
+
+  # training
+  for epoch in range(start_epoch,stop_epoch):
+
+    # randomly split seen domains to pseudo-seen and pseudo-unseen domains
+    random_set = random.sample(base_set, k=2)
+    ps_set = random_set[0]
+    pu_set = random_set[1:]
+    ps_loader = base_datamgr.get_data_loader(os.path.join(params.data_dir, ps_set, 'base.json'), aug=params.train_aug)
+    pu_loader = base_datamgr.get_data_loader([os.path.join(params.data_dir, dataset, 'base.json') for dataset in pu_set], aug=params.train_aug)
+
+    # train loop
+    model.train()
+    total_it = model.trainall_loop(epoch, ps_loader, pu_loader, aux_iter, total_it)
+
+    # validate
+    model.eval()
+    with torch.no_grad():
+      acc = model.test_loop(val_loader)
+
+    # save
+    if acc > max_acc:
+      print("best model! save...")
+      max_acc = acc
+      outfile = os.path.join(params.checkpoint_dir, 'best_model.tar')
+      model.save(outfile, epoch)
+    else:
+      print('GG!! best accuracy {:f}'.format(max_acc))
+    if ((epoch + 1) % params.save_freq==0) or (epoch == stop_epoch - 1):
+      outfile = os.path.join(params.checkpoint_dir, '{:d}.tar'.format(epoch + 1))
+      model.save(outfile, epoch)
+
+  return
+
+
+# --- main function ---
+if __name__=='__main__':
+
+  # set numpy random seed
+  np.random.seed(10)
+
+  # parse argument
+  params = parse_args('train')
+  print('--- LFTNet training: {} ---\n'.format(params.name))
+  print(params)
+
+  # output and tensorboard dir
+  params.tf_dir = '%s/log/%s'%(params.save_dir, params.name)
+  params.checkpoint_dir = '%s/checkpoints/%s'%(params.save_dir, params.name)
+  if not os.path.isdir(params.checkpoint_dir):
+    os.makedirs(params.checkpoint_dir)
+
+  # dataloader
+  print('\n--- prepare dataloader ---')
+  print('  train with multiple seen domains (unseen domain: {})'.format(params.testset))
+  datasets = ['miniImagenet', 'cars', 'places', 'cub', 'plantae']
+  datasets.remove(params.testset)
+  val_file = os.path.join(params.data_dir, 'miniImagenet', 'val.json')
+
+  # model
+  print('\n--- build LFTNet model ---')
+  if 'Conv' in params.model:
+    image_size = 84
+  else:
+    image_size = 224
+
+  n_query = max(1, int(16* params.test_n_way/params.train_n_way))
+  train_few_shot_params   = dict(n_way = params.train_n_way, n_support = params.n_shot)
+  base_datamgr            = SetDataManager(image_size, n_query = n_query,  **train_few_shot_params)
+  aux_datamgr             = SimpleDataManager(image_size, batch_size=16)
+  aux_iter              = iter(cycle(aux_datamgr.get_data_loader(os.path.join(params.data_dir, 'miniImagenet', 'base.json'), aug=params.train_aug)))
+  test_few_shot_params    = dict(n_way = params.test_n_way, n_support = params.n_shot)
+  val_datamgr             = SetDataManager(image_size, n_query = n_query, **test_few_shot_params)
+  val_loader              = val_datamgr.get_data_loader( val_file, aug = False)
+
+  model = LFTNet(params, tf_path=params.tf_dir)
+  model.cuda()
+
+  # resume training
+  start_epoch = params.start_epoch
+  stop_epoch = params.stop_epoch
+  if params.resume != '':
+    resume_file = get_resume_file('%s/checkpoints/%s'%(params.save_dir, params.resume), params.resume_epoch)
+    if resume_file is not None:
+      start_epoch = model.resume(resume_file)
+      print('  resume the training with at {} epoch (model file {})'.format(start_epoch, params.resume))
+    else:
+      raise ValueError('No resume file')
+  # load pre-trained feature encoder
+  else:
+    if params.warmup == 'gg3b0':
+      raise Exception('Must provide pre-trained feature-encoder file using --warmup option!')
+    model.model.feature.load_state_dict(load_warmup_state('%s/checkpoints/%s'%(params.save_dir, params.warmup), params.method), strict=False)
+
+  # training
+  print('\n--- start the training ---')
+  train(base_datamgr, datasets, aux_iter, val_loader, model, start_epoch, stop_epoch, params)
+
+File Path: train_baseline.py
+Content:
+import numpy as np
+import torch
+import torch.optim
+import os
+
+from methods import backbone
+from methods.backbone import model_dict
+from data.datamgr import SimpleDataManager, SetDataManager
+from methods.baselinetrain import BaselineTrain
+from methods.protonet import ProtoNet
+from methods.matchingnet import MatchingNet
+from methods.relationnet import RelationNet
+from methods.gnnnet import GnnNet
+from options import parse_args, get_resume_file, load_warmup_state
+
+def train(base_loader, val_loader, model, start_epoch, stop_epoch, params):
+
+  # get optimizer and checkpoint path
+  optimizer = torch.optim.Adam(model.parameters())
+  if not os.path.isdir(params.checkpoint_dir):
+    os.makedirs(params.checkpoint_dir)
+
+  # for validation
+  max_acc = 0
+  total_it = 0
+
+  # start
+  for epoch in range(start_epoch,stop_epoch):
+    model.train()
+    total_it = model.train_loop(epoch, base_loader,  optimizer, total_it) #model are called by reference, no need to return
+    model.eval()
+
+    acc = model.test_loop( val_loader)
+    if acc > max_acc :
+      print("best model! save...")
+      max_acc = acc
+      outfile = os.path.join(params.checkpoint_dir, 'best_model.tar')
+      torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
+    else:
+      print("GG! best accuracy {:f}".format(max_acc))
+
+    if ((epoch + 1) % params.save_freq==0) or (epoch==stop_epoch-1):
+      outfile = os.path.join(params.checkpoint_dir, '{:d}.tar'.format(epoch))
+      torch.save({'epoch':epoch, 'state':model.state_dict()}, outfile)
+
+  return model
+
+
+# --- main function ---
+if __name__=='__main__':
+
+  # set numpy random seed
+  np.random.seed(10)
+
+  # parser argument
+  params = parse_args('train')
+  print('--- baseline training: {} ---\n'.format(params.name))
+  print(params)
+
+  # output and tensorboard dir
+  params.tf_dir = '%s/log/%s'%(params.save_dir, params.name)
+  params.checkpoint_dir = '%s/checkpoints/%s'%(params.save_dir, params.name)
+  if not os.path.isdir(params.checkpoint_dir):
+    os.makedirs(params.checkpoint_dir)
+
+  # dataloader
+  print('\n--- prepare dataloader ---')
+  if params.dataset == 'multi':
+    print('  train with multiple seen domains (unseen domain: {})'.format(params.testset))
+    datasets = ['miniImagenet', 'cars', 'places', 'cub', 'plantae']
+    datasets.remove(params.testset)
+    base_file = [os.path.join(params.data_dir, dataset, 'base.json') for dataset in datasets]
+    val_file  = os.path.join(params.data_dir, 'miniImagenet', 'val.json')
+  else:
+    print('  train with single seen domain {}'.format(params.dataset))
+    base_file  = os.path.join(params.data_dir, params.dataset, 'base.json')
+    val_file   = os.path.join(params.data_dir, params.dataset, 'val.json')
+
+  # model
+  print('\n--- build model ---')
+  if 'Conv' in params.model:
+    image_size = 84
+  else:
+    image_size = 224
+
+  if params.method in ['baseline', 'baseline++'] :
+    print('  pre-training the feature encoder {} using method {}'.format(params.model, params.method))
+    base_datamgr    = SimpleDataManager(image_size, batch_size=16)
+    base_loader     = base_datamgr.get_data_loader( base_file , aug=params.train_aug )
+    val_datamgr     = SimpleDataManager(image_size, batch_size=64)
+    val_loader      = val_datamgr.get_data_loader(val_file, aug=False)
+    if params.method == 'baseline':
+      model           = BaselineTrain(model_dict[params.model], params.num_classes, tf_path=params.tf_dir)
+    elif params.method == 'baseline++':
+      model           = BaselineTrain(model_dict[params.model], params.num_classes, loss_type='dist', tf_path=params.tf_dir)
+
+  elif params.method in ['protonet','matchingnet','relationnet', 'relationnet_softmax', 'gnnnet']:
+    print('  baseline training the model {} with feature encoder {}'.format(params.method, params.model))
+
+    #if test_n_way is smaller than train_n_way, reduce n_query to keep batch size small
+    n_query = max(1, int(16* params.test_n_way/params.train_n_way))
+
+    train_few_shot_params    = dict(n_way = params.train_n_way, n_support = params.n_shot)
+    base_datamgr            = SetDataManager(image_size, n_query = n_query,  **train_few_shot_params)
+    base_loader             = base_datamgr.get_data_loader( base_file , aug = params.train_aug )
+
+    test_few_shot_params     = dict(n_way = params.test_n_way, n_support = params.n_shot)
+    val_datamgr             = SetDataManager(image_size, n_query = n_query, **test_few_shot_params)
+    val_loader              = val_datamgr.get_data_loader( val_file, aug = False)
+
+    if params.method == 'protonet':
+      model           = ProtoNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method == 'gnnnet':
+      model           = GnnNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method == 'matchingnet':
+      model           = MatchingNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)
+    elif params.method in ['relationnet', 'relationnet_softmax']:
+      if params.model == 'Conv4':
+        feature_model = backbone.Conv4NP
+      elif params.model == 'Conv6':
+        feature_model = backbone.Conv6NP
+      else:
+        feature_model = model_dict[params.model]
+      loss_type = 'mse' if params.method == 'relationnet' else 'softmax'
+      model           = RelationNet( feature_model, loss_type = loss_type, tf_path=params.tf_dir, **train_few_shot_params)
+  else:
+    raise ValueError('Unknown method')
+  model = model.cuda()
+
+  # load model
+  start_epoch = params.start_epoch
+  stop_epoch = params.stop_epoch
+  if params.resume != '':
+    resume_file = get_resume_file('%s/checkpoints/%s'%(params.save_dir, params.resume), params.resume_epoch)
+    if resume_file is not None:
+      tmp = torch.load(resume_file)
+      start_epoch = tmp['epoch']+1
+      model.load_state_dict(tmp['state'])
+      print('  resume the training with at {} epoch (model file {})'.format(start_epoch, params.resume))
+  elif 'baseline' not in params.method:
+    if params.warmup == 'gg3b0':
+      raise Exception('Must provide the pre-trained feature encoder file using --warmup option!')
+    state = load_warmup_state('%s/checkpoints/%s'%(params.save_dir, params.warmup), params.method)
+    model.feature.load_state_dict(state, strict=False)
+
+  # training
+  print('\n--- start the training ---')
+  model = train(base_loader, val_loader,  model, start_epoch, stop_epoch, params)
+
+File Path: utils.py
+Content:
+import torch
+import numpy as np
+
+def one_hot(y, num_class):         
+    return torch.zeros((len(y), num_class)).scatter_(1, y.unsqueeze(1), 1)
+
+def DBindex(cl_data_file):
+    class_list = cl_data_file.keys()
+    cl_num= len(class_list)
+    cl_means = []
+    stds = []
+    DBs = []
+    for cl in class_list:
+        cl_means.append( np.mean(cl_data_file[cl], axis = 0) )
+        stds.append( np.sqrt(np.mean( np.sum(np.square( cl_data_file[cl] - cl_means[-1]), axis = 1))))
+
+    mu_i = np.tile( np.expand_dims( np.array(cl_means), axis = 0), (len(class_list),1,1) )
+    mu_j = np.transpose(mu_i,(1,0,2))
+    mdists = np.sqrt(np.sum(np.square(mu_i - mu_j), axis = 2))
+    
+    for i in range(cl_num):
+        DBs.append( np.max([ (stds[i]+ stds[j])/mdists[i,j]  for j in range(cl_num) if j != i ]) )
+    return np.mean(DBs)
+
+def sparsity(cl_data_file):
+    class_list = cl_data_file.keys()
+    cl_sparsity = []
+    for cl in class_list:
+        cl_sparsity.append(np.mean([np.sum(x!=0) for x in cl_data_file[cl] ])  ) 
+
+    return np.mean(cl_sparsity) 
+
+Output:
+{
+    "experimental_code": "import torchimport torch.nn as nnfrom methods import protonetfrom methods import matchingnetfrom methods import relationnetfrom methods import gnnnetfrom methods.backbone import model_dictfrom methods import backbonefrom methods import gnnfrom tensorboardX import SummaryWriterclass LFTNet(nn.Module):  def __init__(self, params, tf_path=None, change_way=True):    super(LFTNet, self).__init__()    self.tf_writer = SummaryWriter(log_dir=tf_path) if tf_path is not None else None    train_few_shot_params    = dict(n_way=params.train_n_way, n_support=params.n_shot)    backbone.FeatureWiseTransformation2d_fw.feature_augment = True    backbone.ConvBlock.maml = True    backbone.SimpleBlock.maml = True    backbone.ResNet.maml = True    if params.method == 'protonet':      model = protonet.ProtoNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)    elif params.method == 'matchingnet':      backbone.LSTMCell.maml = True      model = matchingnet.MatchingNet( model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)    elif params.method in ['relationnet', 'relationnet_softmax']:      relationnet.RelationConvBlock.maml = True      relationnet.RelationModule.maml = True      if params.model == 'Conv4':        feature_model = backbone.Conv4NP      elif params.model == 'Conv6':        feature_model = backbone.Conv6NP      else:        feature_model = model_dict[params.model]      loss_type = 'mse' if params.method == 'relationnet' else 'softmax'      model = relationnet.RelationNet( feature_model, loss_type = loss_type, tf_path=params.tf_dir, **train_few_shot_params)    elif params.method == 'gnnnet':      gnnnet.GnnNet.maml=True      gnn.Gconv.maml=True      gnn.Wcompute.maml=True      model = gnnnet.GnnNet(model_dict[params.model], tf_path=params.tf_dir, **train_few_shot_params)    else:      raise ValueError('Unknown method')    self.model = model    print('  train with {} framework'.format(params.method))    feat_dim = self.model.feat_dim[0] if type(self.model.feat_dim) is list else self.model.feat_dim    self.aux_classifier = nn.Sequential(        nn.Linear(feat_dim, feat_dim),        nn.ReLU(inplace=True),        nn.Linear(feat_dim, feat_dim),        nn.ReLU(inplace=True),        nn.Linear(feat_dim, 64))    self.aux_loss_fn = nn.CrossEntropyLoss()    model_params, ft_params = self.split_model_parameters()    self.model_optim = torch.optim.Adam(model_params + list(self.aux_classifier.parameters()))    self.ft_optim = torch.optim.Adam(ft_params, weight_decay=1e-8, lr=1e-3)    self.total_epoch = params.stop_epoch  def split_model_parameters(self):    model_params = []    ft_params = []    for n, p in self.model.named_parameters():      n = n.split('.')      if n[-1] == 'gamma' or n[-1] == 'beta':        ft_params.append(p)      else:        model_params.append(p)    return model_params, ft_params  def forward_aux_loss(self, x, y):    x = x.cuda()    y = y.cuda()    feat = self.model.feature(x)    if feat.dim() > 2:      feat = nn.functional.avg_pool2d(feat, 7)      feat = feat.view(feat.size(0), -1)    scores = self.aux_classifier(feat)    loss = self.aux_loss_fn(scores, y)    return loss  def trainall_loop(self, epoch, ps_loader, pu_loader, aux_iter, total_it):    print_freq = len(ps_loader) / 10    avg_model_loss = 0.    avg_ft_loss = 0.    for i, ((x, _), (x_new, _)) in enumerate(zip(ps_loader, pu_loader)):      for weight in self.split_model_parameters()[0]:        weight.fast = None      self.model.eval()      x_aux, y_aux = next(aux_iter)      aux_loss = self.forward_aux_loss(x_aux, y_aux)      aux_loss_weighted = aux_loss*(0.9**((20*epoch//self.total_epoch)))      self.model.train()      self.model.n_query = x.size(1) - self.model.n_support      if self.model.change_way:        self.model.n_way = x.size(0)      _, model_loss = self.model.set_forward_loss(x)      meta_grad = torch.autograd.grad(model_loss, self.split_model_parameters()[0], create_graph=True)      for k, weight in enumerate(self.split_model_parameters()[0]):        weight.fast = weight - self.model_optim.param_groups[0]['lr']*meta_grad[k]      meta_grad = [g.detach() for g in meta_grad]      self.model.eval()      _, ft_loss = self.model.set_forward_loss(x_new)      self.model_optim.zero_grad()      aux_loss_weighted.backward()      for k, weight in enumerate(self.split_model_parameters()[0]):        weight.grad = meta_grad[k] if weight.grad is None else weight.grad + meta_grad[k]      self.model_optim.step()      self.ft_optim.zero_grad()      ft_loss.backward()      self.ft_optim.step()      avg_model_loss += model_loss.item()      avg_ft_loss += ft_loss.item()      if (i + 1) % print_freq == 0:        print('Epoch {:d}/{:d} | Batch {:d}/{:d} | model_loss {:f}, ft_loss {:f}'.format(        epoch + 1, self.total_epoch, i + 1, len(ps_loader), avg_model_loss/float(i+1), avg_ft_loss/float(i+1)))      if (total_it + 1) % 10 == 0 and self.tf_writer is not None:        self.tf_writer.add_scalar('LFTNet/model_loss', model_loss.item(), total_it + 1)        self.tf_writer.add_scalar('LFTNet/ft_loss', ft_loss.item(), total_it + 1)        self.tf_writer.add_scalar('LFTNet/aux_loss', aux_loss.item(), total_it + 1)      total_it += 1    return total_it  def train_loop(self, epoch, base_loader, total_it):    print_freq = len(base_loader) / 10    avg_model_loss = 0.    self.model.train()    for weight in self.model.parameters():      weight.fast = None    for i, (x, _) in enumerate(base_loader):      self.model.n_query = x.size(1) - self.model.n_support      if self.model.change_way:        self.model.n_way = x.size(0)      _, model_loss = self.model.set_forward_loss(x)      self.model_optim.zero_grad()      model_loss.backward()      self.model_optim.step()      avg_model_loss += model_loss.item()      if (i + 1) % print_freq == 0:        print('Epoch {:d}/{:d} | Batch {:d}/{:d} | model_loss {:f}'.format(epoch + 1, self.total_epoch, i + 1, len(base_loader), avg_model_loss/float(i+1)))      if (total_it + 1) % 10 == 0 and self.tf_writer is not None:        self.tf_writer.add_scalar('LFTNet/model_loss', model_loss.item(), total_it + 1)      total_it += 1    return total_it  def test_loop(self, test_loader, record=None):    self.model.eval()    for weight in self.model.parameters():      weight.fast = None    return self.model.test_loop(test_loader, record)  def cuda(self):    self.model.cuda()    self.aux_classifier.cuda()  def reset(self, warmUpState=None):    if warmUpState is not None:      self.model.feature.load_state_dict(warmUpState, strict=False)      print('    reset feature success!')    self.model.reset_modules()    self.model.cuda()    self.model_optim = torch.optim.Adam(self.split_model_parameters()[0])    return  def save(self, filename, epoch):    state = {'epoch': epoch,             'model_state': self.model.state_dict(),             'aux_classifier_state': self.aux_classifier.state_dict(),             'model_optim_state': self.model_optim.state_dict(),             'ft_optim_state': self.ft_optim.state_dict()}    torch.save(state, filename)  def resume(self, filename):    state = torch.load(filename)    self.model.load_state_dict(state['model_state'])    self.aux_classifier.load_state_dict(state['aux_classifier_state'])    self.model_optim.load_state_dict(state['model_optim_state'])    self.ft_optim.load_state_dict(state['ft_optim_state'])    return state['epoch'] + 1import torch.nn.functional as Fdef softplus(x):  return torch.nn.functional.softplus(x, beta=100)class Linear_fw(nn.Linear):  def __init__(self, in_features, out_features, bias=True):    super(Linear_fw, self).__init__(in_features, out_features, bias=bias)    self.weight.fast = None    self.bias.fast = None  def forward(self, x):    if self.weight.fast is not None and self.bias.fast is not None:      out = F.linear(x, self.weight.fast, self.bias.fast)    else:      out = super(Linear_fw, self).forward(x)    return outclass Conv2d_fw(nn.Conv2d):  def __init__(self, in_channels, out_channels, kernel_size, stride=1,padding=0, bias = True):    super(Conv2d_fw, self).__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=bias)    self.weight.fast = None    if not self.bias is None:      self.bias.fast = None  def forward(self, x):    if self.bias is None:      if self.weight.fast is not None:        out = F.conv2d(x, self.weight.fast, None, stride= self.stride, padding=self.padding)      else:        out = super(Conv2d_fw, self).forward(x)    else:      if self.weight.fast is not None and self.bias.fast is not None:        out = F.conv2d(x, self.weight.fast, self.bias.fast, stride= self.stride, padding=self.padding)      else:        out = super(Conv2d_fw, self).forward(x)    return outclass FeatureWiseTransformation2d_fw(nn.BatchNorm2d):  feature_augment = False  def __init__(self, num_features, momentum=0.1, track_running_stats=True):    super(FeatureWiseTransformation2d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)    self.weight.fast = None    self.bias.fast = None    if self.track_running_stats:      self.register_buffer('running_mean', torch.zeros(num_features))      self.register_buffer('running_var', torch.zeros(num_features))    if self.feature_augment:      self.gamma = torch.nn.Parameter(torch.ones(1, num_features, 1, 1)*0.3)      self.beta  = torch.nn.Parameter(torch.ones(1, num_features, 1, 1)*0.5)    self.reset_parameters()  def reset_running_stats(self):    if self.track_running_stats:      self.running_mean.zero_()      self.running_var.fill_(1)  def forward(self, x, step=0):    if self.weight.fast is not None and self.bias.fast is not None:      weight = self.weight.fast      bias = self.bias.fast    else:      weight = self.weight      bias = self.bias    if self.track_running_stats:      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)    else:      out = F.batch_norm(x, torch.zeros_like(x), torch.ones_like(x), weight, bias, training=True, momentum=1)    if self.feature_augment and self.training:      gamma = (1 + torch.randn(1, self.num_features, 1, 1, dtype=self.gamma.dtype, device=self.gamma.device)*softplus(self.gamma)).expand_as(out)      beta = (torch.randn(1, self.num_features, 1, 1, dtype=self.beta.dtype, device=self.beta.device)*softplus(self.beta)).expand_as(out)      out = gamma*out + beta    return outclass BatchNorm2d_fw(nn.BatchNorm2d):  def __init__(self, num_features, momentum=0.1, track_running_stats=True):    super(BatchNorm2d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)    self.weight.fast = None    self.bias.fast = None    if self.track_running_stats:      self.register_buffer('running_mean', torch.zeros(num_features))      self.register_buffer('running_var', torch.zeros(num_features))    self.reset_parameters()  def reset_running_stats(self):    if self.track_running_stats:      self.running_mean.zero_()      self.running_var.fill_(1)  def forward(self, x, step=0):    if self.weight.fast is not None and self.bias.fast is not None:      weight = self.weight.fast      bias = self.bias.fast    else:      weight = self.weight      bias = self.bias    if self.track_running_stats:      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)    else:      out = F.batch_norm(x, torch.zeros(x.size(1), dtype=x.dtype, device=x.device), torch.ones(x.size(1), dtype=x.dtype, device=x.device), weight, bias, training=True, momentum=1)    return outclass BatchNorm1d_fw(nn.BatchNorm1d):  def __init__(self, num_features, momentum=0.1, track_running_stats=True):    super(BatchNorm1d_fw, self).__init__(num_features, momentum=momentum, track_running_stats=track_running_stats)    self.weight.fast = None    self.bias.fast = None    if self.track_running_stats:      self.register_buffer('running_mean', torch.zeros(num_features))      self.register_buffer('running_var', torch.zeros(num_features))    self.reset_parameters()  def reset_running_stats(self):    if self.track_running_stats:      self.running_mean.zero_()      self.running_var.fill_(1)  def forward(self, x, step=0):    if self.weight.fast is not None and self.bias.fast is not None:      weight = self.weight.fast      bias = self.bias.fast    else:      weight = self.weight      bias = self.bias    if self.track_running_stats:      out = F.batch_norm(x, self.running_mean, self.running_var, weight, bias, training=self.training, momentum=self.momentum)    else:      out = F.batch_norm(x, torch.zeros(x.size(1), dtype=x.dtype, device=x.device), torch.ones(x.size(1), dtype=x.dtype, device=x.device), weight, bias, training=True, momentum=1)    return outclass ConvBlock(nn.Module):  maml = False  def __init__(self, indim, outdim, pool = True, padding = 1):    super(ConvBlock, self).__init__()    self.indim  = indim    self.outdim = outdim    if self.maml:      self.C = Conv2d_fw(indim, outdim, 3, padding = padding)      self.BN = FeatureWiseTransformation2d_fw(outdim)    else:      self.C = nn.Conv2d(indim, outdim, 3, padding= padding)      self.BN = nn.BatchNorm2d(outdim)    self.relu = nn.ReLU(inplace=True)    self.parametrized_layers = [self.C, self.BN, self.relu]    if pool:      self.pool = nn.MaxPool2d(2)      self.parametrized_layers.append(self.pool)    for layer in self.parametrized_layers:      backbone.init_layer(layer)    self.trunk = nn.Sequential(*self.parametrized_layers)  def forward(self,x):    out = self.trunk(x)    return outclass SimpleBlock(nn.Module):  maml = False  def __init__(self, indim, outdim, half_res, leaky=False):    super(SimpleBlock, self).__init__()    self.indim = indim    self.outdim = outdim    if self.maml:      self.C1 = Conv2d_fw(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1, bias=False)      self.BN1 = BatchNorm2d_fw(outdim)      self.C2 = Conv2d_fw(outdim, outdim,kernel_size=3, padding=1,bias=False)      self.BN2 = FeatureWiseTransformation2d_fw(outdim)    else:      self.C1 = nn.Conv2d(indim, outdim, kernel_size=3, stride=2 if half_res else 1, padding=1, bias=False)      self.BN1 = nn.BatchNorm2d(outdim)      self.C2 = nn.Conv2d(outdim, outdim,kernel_size=3, padding=1,bias=False)      self.BN2 = nn.BatchNorm2d(outdim)    self.relu1 = nn.ReLU(inplace=True) if not leaky else nn.LeakyReLU(0.2, inplace=True)    self.relu2 = nn.ReLU(inplace=True) if not leaky else nn.LeakyReLU(0.2, inplace=True)    self.parametrized_layers = [self.C1, self.C2, self.BN1, self.BN2]    self.half_res = half_res    if indim!=outdim:      if self.maml:        self.shortcut = Conv2d_fw(indim, outdim, 1, 2 if half_res else 1, bias=False)        self.BNshortcut = FeatureWiseTransformation2d_fw(outdim)      else:        self.shortcut = nn.Conv2d(indim, outdim, 1, 2 if half_res else 1, bias=False)        self.BNshortcut = nn.BatchNorm2d(outdim)      self.parametrized_layers.append(self.shortcut)      self.parametrized_layers.append(self.BNshortcut)      self.shortcut_type = '1x1'    else:      self.shortcut_type = 'identity'    for layer in self.parametrized_layers:      backbone.init_layer(layer)  def forward(self, x):    out = self.C1(x)    out = self.BN1(out)    out = self.relu1(out)    out = self.C2(out)    out = self.BN2(out)    short_out = x if self.shortcut_type == 'identity' else self.BNshortcut(self.shortcut(x))    out = out + short_out    out = self.relu2(out)    return outclass ResNet(nn.Module):  maml = False  def __init__(self,block,list_of_num_layers, list_of_out_dims, flatten=True, leakyrelu=False):    super(ResNet,self).__init__()    self.grads = []    self.fmaps = []    assert len(list_of_num_layers)==4, 'Can have only four stages'    if self.maml:      conv1 = Conv2d_fw(3, 64, kernel_size=7, stride=2, padding=3, bias=False)      bn1 = BatchNorm2d_fw(64)    else:      conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)      bn1 = nn.BatchNorm2d(64)    relu = nn.ReLU(inplace=True) if not leakyrelu else nn.LeakyReLU(0.2, inplace=True)    pool1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)    backbone.init_layer(conv1)    backbone.init_layer(bn1)    trunk = [conv1, bn1, relu, pool1]    indim = 64    for i in range(4):      for j in range(list_of_num_layers[i]):        half_res = (i>=1) and (j==0)        B = block(indim, list_of_out_dims[i], half_res, leaky=leakyrelu)        trunk.append(B)        indim = list_of_out_dims[i]    if flatten:      avgpool = nn.AvgPool2d(7)      trunk.append(avgpool)      trunk.append(backbone.Flatten())      self.final_feat_dim = indim    else:      self.final_feat_dim = [ indim, 7, 7]    self.trunk = nn.Sequential(*trunk)  def forward(self,x):    out = self.trunk(x)    return out",
+    "experimental_info": "The proposed LFTNet method integrates feature-wise transformation layers into the feature encoder of metric-based few-shot classification models. The experimental setup involves multi-domain training, where available seen domains are dynamically split into a pseudo-seen (PS) domain and a pseudo-unseen (PU) domain in each iteration. One domain is held out for testing. The base metric-based models can be ProtoNet, MatchingNet, RelationNet, or GNNNet, specified by `params.method`. The feature encoder backbone (`Conv{4|6}` or `ResNet{10|18|34}`) has an `image_size` of 84 for Conv models and 224 for ResNet models.The core feature-wise transformation layers (`FeatureWiseTransformation2d_fw`) modulate intermediate feature activations with affine transformations (scaling term γ and bias term β) that are sampled from Gaussian distributions. The standard deviations of these Gaussians are parameterized by learnable `θγ` and `θβ` terms, which are initialized such that `γ` starts at `1 + N(0, softplus(0.3))` and `β` at `N(0, softplus(0.5))`. These layers are inserted after batch normalization layers at multiple levels within the feature encoder's `ConvBlock` and `SimpleBlock` (specifically as `BN` in `ConvBlock` and `BN2` in `SimpleBlock`).A learning-to-learn algorithm is employed to optimize these hyperparameters (`θγ` and `θβ`) alongside the metric-based model. In each training iteration, the metric-based model is first updated using a pseudo-seen task. Then, the effectiveness of the feature-wise transformation layers is measured on a pseudo-unseen task (with the transformation layers effectively disabled because `model.eval()` is called before measuring `ft_loss`), and its loss (`ft_loss`) is used to update the hyperparameters `θγ` and `θβ`. This enables joint optimization of both the metric-based model and the transformation layers. For the inner loop updates, fast weights (implemented by `Linear_fw`, `Conv2d_fw`, `BatchNorm2d_fw`, `BatchNorm1d_fw`) are utilized.An auxiliary loss (`aux_classifier` with `nn.CrossEntropyLoss`) is also incorporated to stabilize training, with its weighting dynamically decreasing over epochs as `aux_loss*(0.9^((20*epoch//total_epoch)))`.The optimizers used are `torch.optim.Adam`. The main model parameters (and auxiliary classifier parameters) are optimized by one Adam optimizer, while the feature-wise transformation parameters (`gamma` and `beta` parameters) are optimized by a separate Adam optimizer with a `weight_decay` of `1e-8` and an `lr` of `1e-3`.Training is performed for a total of `params.stop_epoch` epochs. The `n_query` size is dynamically calculated as `max(1, int(16 * params.test_n_way / params.train_n_way))`. Data augmentation is performed during training if `params.train_aug` is true. Training uses `np.random.seed(10)` for reproducibility. Pre-trained feature encoders can be loaded as a warmup state using the `--warmup` option."
+}
