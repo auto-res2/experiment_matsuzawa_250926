@@ -1,0 +1,17 @@
+
+Input:
+# Task
+You carefully read the contents of the “Paper Outline” and select one GitHub link from the “GitHub URLs List” that you think is most relevant to the contents.
+# Constraints
+- Output the index number corresponding to the selected GitHub URL.
+- Be sure to select only one GitHub URL.
+- If there is no related GitHub link, output None.
+# Paper Outline
+FeCAM re-introduces the anisotropic Mahalanobis distance for CIL, departing from the common Euclidean distance. It models class feature distributions as multivariate normal (N(µy, Σy)) and employs an optimal Bayesian classifier. Key techniques to improve covariance estimation and classification include: 1) Covariance Matrix Approximation: utilizing either a common, incrementally updated covariance matrix for all seen classes or a separate matrix for each class. 2) Correlation Normalization: making covariance matrices comparable by scaling their diagonal elements to one. 3) Covariance Shrinkage: obtaining a full-rank, invertible matrix by adding a scaled identity matrix, especially crucial when samples are fewer than feature dimensions. 4) Tukey’s Ladder of Powers Transformation: applying a power transformation (λ=0.5) to feature vectors to reduce skewness and make distributions more Gaussian-like before computing covariance matrices. The classification is then based on the Mahalanobis distance to these transformed, shrunk, and normalized class prototypes without requiring any further training steps in new tasks.
+
+# GitHub URLs List
+['https://github.com/dipamgoswami/FeCAM']
+Output:
+{
+    "index": 0
+}
